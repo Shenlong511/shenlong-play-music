@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
+import android.media.audiofx.Visualizer
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -13,6 +14,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -38,6 +45,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -47,6 +55,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -74,6 +85,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.PI
+import kotlin.math.ln
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 // ---------------------------------------------------------------------------
 // Modelo
@@ -241,6 +256,129 @@ object EqManager {
 }
 
 // ---------------------------------------------------------------------------
+// Visualizador de audio estilo Windows Media Player: barras verticales
+// de colores neón que suben y bajan al ritmo de la música.
+// Usa android.media.audiofx.Visualizer sobre el MISMO audioSessionId de
+// ExoPlayer que ya usa el ecualizador, así que no interfiere con él.
+// No necesita el permiso RECORD_AUDIO: el Visualizer lee la salida de
+// audio de la propia app a través de su audioSessionId.
+// Si el Visualizer no está disponible en el dispositivo (o devuelve un
+// error), no rompe la app: se activa el modo de respaldo, con barras
+// animadas suaves, y la música sigue sonando normal.
+// ---------------------------------------------------------------------------
+
+object VisualizerManager {
+    const val BAR_COUNT = 28
+    private const val MIN_LEVEL = 0.06f
+
+    private var visualizer: Visualizer? = null
+    private var playing: Boolean = false
+    private val smoothed = FloatArray(BAR_COUNT) { MIN_LEVEL }
+
+    private val _levels = MutableStateFlow(List(BAR_COUNT) { MIN_LEVEL })
+    val levels: StateFlow<List<Float>> = _levels.asStateFlow()
+
+    private val _fallback = MutableStateFlow(false)
+    /** true cuando el Visualizer real no está disponible y hay que animar. */
+    val fallback: StateFlow<Boolean> = _fallback.asStateFlow()
+
+    fun attach(audioSessionId: Int) {
+        release()
+        if (audioSessionId == C.AUDIO_SESSION_ID_UNSET || audioSessionId == 0) return
+        try {
+            val range = Visualizer.getCaptureSizeRange()
+            val captureSize = range[1].coerceIn(range[0], 1024)
+            val viz = Visualizer(audioSessionId)
+            viz.captureSize = captureSize
+            viz.setDataCaptureListener(
+                object : Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(
+                        visualizer: Visualizer?,
+                        waveform: ByteArray?,
+                        samplingRate: Int
+                    ) {
+                        // Solo se usa FFT; la forma de onda se ignora.
+                    }
+
+                    override fun onFftDataCapture(
+                        visualizer: Visualizer?,
+                        fft: ByteArray?,
+                        samplingRate: Int
+                    ) {
+                        if (fft == null || !playing) return
+                        updateLevelsFromFft(fft)
+                    }
+                },
+                Visualizer.getMaxCaptureRate() / 2,
+                false,
+                true
+            )
+            viz.enabled = playing
+            visualizer = viz
+            _fallback.value = false
+        } catch (e: Exception) {
+            // Visualizer no disponible en este dispositivo: respaldo animado.
+            release()
+            _fallback.value = true
+        }
+    }
+
+    /** Pausa o reanuda la captura: en pausa las barras caen al mínimo. */
+    fun setPlaying(isPlaying: Boolean) {
+        playing = isPlaying
+        try { visualizer?.enabled = isPlaying } catch (e: Exception) { }
+        if (!isPlaying) {
+            for (i in smoothed.indices) smoothed[i] = MIN_LEVEL
+            _levels.value = List(BAR_COUNT) { MIN_LEVEL }
+        }
+    }
+
+    fun release() {
+        try { visualizer?.enabled = false } catch (e: Exception) { }
+        try { visualizer?.release() } catch (e: Exception) { }
+        visualizer = null
+        for (i in smoothed.indices) smoothed[i] = MIN_LEVEL
+        _levels.value = List(BAR_COUNT) { MIN_LEVEL }
+    }
+
+    /**
+     * Convierte la FFT en 28 alturas de barra (0.06 a 1.0).
+     * Los bins se reparten en escala logarítmica, como en los
+     * visualizadores clásicos: más detalle en los graves.
+     */
+    private fun updateLevelsFromFft(fft: ByteArray) {
+        val bins = fft.size / 2
+        if (bins < 2) return
+        val next = FloatArray(BAR_COUNT)
+        for (bar in 0 until BAR_COUNT) {
+            val start = (bins * Math.pow(
+                bar.toDouble() / BAR_COUNT, 1.6
+            )).toInt().coerceIn(0, bins - 1)
+            val end = (bins * Math.pow(
+                (bar + 1).toDouble() / BAR_COUNT, 1.6
+            )).toInt().coerceIn(start + 1, bins)
+            var maxMag = 0f
+            var i = start
+            while (i < end) {
+                val re = fft[2 * i].toInt()
+                val im = fft[2 * i + 1].toInt()
+                val mag = sqrt((re * re + im * im).toFloat())
+                if (mag > maxMag) maxMag = mag
+                i++
+            }
+            // Escala logarítmica: mag típica 0..~130 -> nivel 0..1.
+            val target = (ln(1f + maxMag / 12f) / ln(1f + 130f / 12f))
+                .coerceIn(MIN_LEVEL, 1f)
+            // Suavizado: sube rápido, baja despacio (efecto de caída).
+            smoothed[bar] = if (target > smoothed[bar]) target
+            else (smoothed[bar] * 0.82f + target * 0.18f).coerceAtLeast(MIN_LEVEL)
+            next[bar] = smoothed[bar]
+        }
+        _levels.value = next.toList()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Reproductor (singleton compartido por la UI, el servicio y el widget)
 // ---------------------------------------------------------------------------
 
@@ -276,6 +414,7 @@ object PlayerManager {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     _isPlaying.value = isPlaying
                     _durationMs.value = duration
+                    VisualizerManager.setPlaying(isPlaying)
                 }
 
                 override fun onPlaybackStateChanged(state: Int) {
@@ -310,6 +449,7 @@ object PlayerManager {
                         ) {
                             attachedSessionId = p.audioSessionId
                             EqManager.attach(p.audioSessionId)
+                            VisualizerManager.attach(p.audioSessionId)
                         }
                     }
                     delay(500)
@@ -455,6 +595,25 @@ fun hasAudioPermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, audioPermission()) ==
         PackageManager.PERMISSION_GRANTED
 
+// Permiso de notificaciones (Android 13+): sin él, en Android 13+ el
+// sistema bloquea la notificación del servicio y no sale el reproductor
+// ni en la barra de notificaciones ni en la pantalla de bloqueo.
+fun notificationPermission(): String? =
+    if (Build.VERSION.SDK_INT >= 33) Manifest.permission.POST_NOTIFICATIONS else null
+
+fun hasNotificationPermission(context: Context): Boolean {
+    val permission = notificationPermission() ?: return true
+    return ContextCompat.checkSelfPermission(context, permission) ==
+        PackageManager.PERMISSION_GRANTED
+}
+
+/** Permisos que se piden juntos al abrir la app: audio + notificaciones. */
+fun permissionsToRequest(): Array<String> {
+    val list = mutableListOf(audioPermission())
+    notificationPermission()?.let { list.add(it) }
+    return list.toTypedArray()
+}
+
 // ---------------------------------------------------------------------------
 // Actividad principal
 // ---------------------------------------------------------------------------
@@ -475,7 +634,9 @@ fun ShenlongPlayMusicApp() {
 
     var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
     var hasPermission by remember { mutableStateOf(hasAudioPermission(context)) }
+    var hasNotifPermission by remember { mutableStateOf(hasNotificationPermission(context)) }
     var query by remember { mutableStateOf("") }
+    var showSearch by remember { mutableStateOf(false) }
     var showFolders by remember { mutableStateOf(false) }
     var selectedFolder by remember { mutableStateOf<String?>(null) }
     var showEq by remember { mutableStateOf(false) }
@@ -491,6 +652,12 @@ fun ShenlongPlayMusicApp() {
     val durationMs by PlayerManager.durationMs.collectAsState()
     val shuffle by PlayerManager.shuffle.collectAsState()
     val repeatMode by PlayerManager.repeatMode.collectAsState()
+
+    // Al salir de la app se libera el Visualizer (sin fugas) junto con
+    // el resto del reproductor.
+    DisposableEffect(Unit) {
+        onDispose { VisualizerManager.release() }
+    }
 
     // Cargar ajustes del ecualizador guardados y aplicarlos.
     LaunchedEffect(Unit) {
@@ -514,10 +681,20 @@ fun ShenlongPlayMusicApp() {
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasPermission = granted
-        if (granted) refreshSongs()
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        hasPermission = result[audioPermission()] == true
+        hasNotifPermission = notificationPermission()?.let { result[it] == true } ?: true
+        if (hasPermission) refreshSongs()
+    }
+
+    // Al abrir la app se piden juntos audio + notificaciones (Android 13+).
+    // Sin el de notificaciones la música sigue sonando, pero Android no
+    // muestra los controles en la barra ni en la pantalla de bloqueo.
+    LaunchedEffect(Unit) {
+        if (!hasPermission || !hasNotifPermission) {
+            permissionLauncher.launch(permissionsToRequest())
+        }
     }
 
     LaunchedEffect(hasPermission) {
@@ -557,26 +734,80 @@ fun ShenlongPlayMusicApp() {
             // ---- Encabezado + controles (se esconden al deslizar) ----
             item {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = "Shenlong Play Music",
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = NeonPurple
-                    )
-                    Text(
-                        text = if (songs.isEmpty()) "Sin canciones todavía"
-                        else "${songs.size} canciones en tu teléfono",
-                        fontSize = 12.sp,
-                        color = Color.DarkGray
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        label = { Text("Buscar canción, artista o álbum", fontSize = 12.sp) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Shenlong Play Music",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = NeonPurple
+                            )
+                            Text(
+                                text = if (songs.isEmpty()) "Sin canciones todavía"
+                                else "${songs.size} canciones en tu teléfono",
+                                fontSize = 12.sp,
+                                color = Color.DarkGray
+                            )
+                        }
+                        // Lupa pequeña (36 dp): al pulsarla se expande la
+                        // barra de búsqueda; al cerrarla vuelve a quedar
+                        // solo la lupa. Antes la barra ocupaba todo el ancho
+                        // siempre y se veía muy grande.
+                        CompactButton(
+                            text = "🔍",
+                            color = NeonBlue,
+                            selected = showSearch,
+                            modifier = Modifier.size(36.dp),
+                            onClick = {
+                                showSearch = !showSearch
+                                if (!showSearch) query = ""
+                            }
+                        )
+                    }
+                    if (showSearch) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = query,
+                                onValueChange = { query = it },
+                                label = { Text("Buscar canción, artista o álbum", fontSize = 12.sp) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            CompactButton(
+                                text = "✕",
+                                color = NeonRed,
+                                selected = false,
+                                modifier = Modifier.size(36.dp),
+                                onClick = { showSearch = false; query = "" }
+                            )
+                        }
+                    }
+                    if (hasPermission && !hasNotifPermission) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Sin el permiso de notificaciones la música sigue " +
+                                "sonando, pero no salen los controles en la pantalla " +
+                                "de bloqueo ni en la barra de notificaciones.",
+                            fontSize = 12.sp,
+                            color = NeonRed
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Button(
+                            onClick = { permissionLauncher.launch(permissionsToRequest()) },
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonBlue),
+                            modifier = Modifier.height(36.dp)
+                        ) {
+                            Text("Dar permiso de notificaciones", fontSize = 12.sp)
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     // Botones compactos, todos con el mismo peso: 36 dp de
                     // alto, letra 12 sp. No se deforman en horizontal ni
@@ -698,7 +929,7 @@ fun ShenlongPlayMusicApp() {
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
-                            onClick = { permissionLauncher.launch(audioPermission()) },
+                            onClick = { permissionLauncher.launch(permissionsToRequest()) },
                             colors = ButtonDefaults.buttonColors(containerColor = NeonBlue),
                             modifier = Modifier.height(36.dp)
                         ) {
@@ -858,6 +1089,67 @@ fun CompactButton(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Visualizador estilo Windows Media Player: 28 barras verticales de
+// colores neón sobre fondo oscuro, que suben y bajan al ritmo real de
+// la música (FFT del Visualizer). En pausa quedan en mínimo; si el
+// Visualizer no existe en el dispositivo, se animan suaves como respaldo.
+// ---------------------------------------------------------------------------
+
+@Composable
+fun VisualizerBars(isPlaying: Boolean, modifier: Modifier = Modifier) {
+    val levels by VisualizerManager.levels.collectAsState()
+    val fallback by VisualizerManager.fallback.collectAsState()
+
+    // Tiempo animado solo para el modo de respaldo (sin Visualizer real).
+    val transition = rememberInfiniteTransition(label = "visualizer-fallback")
+    val time by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = (2 * PI).toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "visualizer-time"
+    )
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(96.dp)
+            .background(Color(0xFF101018), RoundedCornerShape(12.dp))
+    ) {
+        val count = VisualizerManager.BAR_COUNT
+        val barWidth = size.width / count
+        val gap = 2.dp.toPx()
+        for (i in 0 until count) {
+            val level = if (fallback) {
+                // Respaldo animado (solo cuando el Visualizer real no existe):
+                // ondas suaves que solo se mueven mientras suena.
+                if (isPlaying) {
+                    (0.25f + 0.30f * sin(time + i * 0.55f).toFloat() +
+                        0.18f * sin(time * 1.7f + i * 1.3f).toFloat())
+                        .coerceIn(0.06f, 1f)
+                } else {
+                    0.06f
+                }
+            } else {
+                levels.getOrElse(i) { 0.06f }
+            }
+            val barHeight = (level * size.height).coerceAtLeast(2.dp.toPx())
+            drawRoundRect(
+                color = NeonColors[i % NeonColors.size],
+                topLeft = Offset(
+                    x = i * barWidth + gap / 2,
+                    y = size.height - barHeight
+                ),
+                size = Size(barWidth - gap, barHeight),
+                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+            )
+        }
+    }
+}
+
 @Composable
 fun NowPlayingCard(
     song: Song,
@@ -879,6 +1171,10 @@ fun NowPlayingCard(
         Text(text = "Sonando ahora", fontSize = 12.sp, color = NeonPink, fontWeight = FontWeight.Bold)
         Text(text = song.title, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Text(text = "${song.artist} • ${song.album}", fontSize = 12.sp, color = Color.DarkGray)
+        Spacer(modifier = Modifier.height(8.dp))
+        // Visualizador estilo Windows Media Player: barras neón al ritmo
+        // de la música, encima de la barra de progreso y los controles.
+        VisualizerBars(isPlaying = isPlaying)
         Spacer(modifier = Modifier.height(6.dp))
         Slider(
             value = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,

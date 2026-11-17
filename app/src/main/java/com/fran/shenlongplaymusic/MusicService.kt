@@ -112,7 +112,7 @@ class MusicService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Reproducción de música",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             )
             channel.description = "Controles de Shenlong Play Music"
             val manager = getSystemService(NotificationManager::class.java)
@@ -146,6 +146,16 @@ class MusicService : Service() {
             .setContentIntent(contentIntent)
             .setOngoing(isPlaying)
             .setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            // Estilo de medios: Android trata la notificación como
+            // reproductor multimedia y muestra sus controles en la barra
+            // de notificaciones y en la pantalla de bloqueo. Sin esto (y
+            // sin el permiso POST_NOTIFICATIONS) no salía nada.
+            .setStyle(
+                androidx.media.app.NotificationCompat.MediaStyle()
+                    .setMediaSession(mediaSession?.sessionCompatToken)
+                    .setShowActionsInCompactView(0, 1, 2)
+            )
             .addAction(
                 android.R.drawable.ic_media_previous,
                 "Anterior",

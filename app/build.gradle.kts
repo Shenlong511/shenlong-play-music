@@ -11,8 +11,8 @@ android {
         applicationId = "com.fran.shenlongplaymusic"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     buildTypes {
@@ -57,6 +57,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-session:1.3.1")
     implementation("androidx.media3:media3-common:1.3.1")
+    // Para NotificationCompat.MediaStyle (controles en bloqueo/notificación)
+    // y el token de la MediaSession.
+    implementation("androidx.media:media:1.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
