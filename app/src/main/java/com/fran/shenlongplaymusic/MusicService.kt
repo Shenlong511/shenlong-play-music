@@ -143,6 +143,12 @@ class MusicService : Service() {
             .setContentTitle(song?.title ?: "Shenlong Play Music")
             .setContentText(song?.artist ?: "Toca para abrir la app")
             .setSmallIcon(R.mipmap.ic_launcher)
+            // Carátula: el paisaje de la canción actual. Android no permite
+            // animación en vivo en la notificación ni en el bloqueo, así
+            // que el paisaje es una imagen fija que cambia con cada canción
+            // (al pulsar siguiente/anterior se reconstruye la notificación
+            // con el paisaje de la canción nueva).
+            .setLargeIcon(song?.let { LandscapeArt.bitmapForSong(it) })
             .setContentIntent(contentIntent)
             .setOngoing(isPlaying)
             .setOnlyAlertOnce(true)

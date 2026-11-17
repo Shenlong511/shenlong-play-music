@@ -6,7 +6,28 @@ Reproductor de música local para Android, sin internet.
 
 - Lee las canciones del teléfono (MediaStore): MP3, AAC, M4A, FLAC, WAV,
   OGG, OPUS, MIDI, AMR.
-- Lista de canciones con búsqueda, y reproducción por carpetas.
+- Lista de canciones con búsqueda (lupa vectorial de 48 dp que se expande),
+  y reproducción por carpetas (se pueden ocultar carpetas y volver a
+  mostrarlas una por una en "Carpetas ocultas").
+- Listas de reproducción: crear listas con nombre, agregar canciones
+  (botón + de cada canción), quitar canciones y borrar listas. Las listas
+  y las carpetas ocultas se guardan en el teléfono (DataStore).
+- Botón de ajustes (engranaje) en el encabezado con menú desplegable:
+  Todas las canciones, Carpetas, Listas de reproducción, Color de
+  tarjetas, Visualización y Ecualizador.
+- Color de tarjetas: color fijo (9 colores) + deslizador de transparencia
+  0-100%, guardado en el teléfono (DataStore).
+- Visualización con 4 estilos (Barras neón, Onda, Círculo y Espejo),
+  elegibles en Ajustes > Visualización y guardados en el teléfono
+  (DataStore). Al girar el teléfono a horizontal, la visualización ocupa
+  toda la pantalla; al pulsar cualquier lugar aparecen/desaparecen los
+  controles (anterior, play/pausa, siguiente) y se esconden solos a los
+  3 segundos. En vertical hay un botón de giro (junto a la lupa y en la
+  tarjeta "Sonando ahora") para pasar a horizontal, y en horizontal el
+  mismo giro vuelve a vertical.
+- Todos los botones de reproducción son iconos de tamaño fijo (48 dp,
+  icono de 24 dp dentro), sin letras: anterior, play/pausa, siguiente,
+  aleatorio y repetir.
 - Aleatorio, repetir lista, repetir una canción, siguiente/anterior,
   play/pausa y barra de progreso.
 - Ecualizador de 5 bandas con presets: Normal, Rock, Pop, Jazz, Clásica,
@@ -15,10 +36,17 @@ Reproductor de música local para Android, sin internet.
   encendido/apagado. Los ajustes se guardan en el teléfono (DataStore).
 - Reproducción en segundo plano (servicio en primer plano + MediaSession):
   suena con la pantalla apagada y los controles aparecen en la pantalla
-  de bloqueo y en la notificación.
+  de bloqueo y en la notificación. Cada canción muestra como carátula un
+  paisaje distinto (20 paisajes dibujados en código, sin fotos ni
+  internet: atardecer, amanecer, noche estrellada, desierto, nieve,
+  bosque, playa, cascada, flores, aurora, volcán, lago, otoño, cerezos,
+  ciudad, pradera, selva, glaciar, cañón y luna llena), que cambia al
+  pasar de canción. En la notificación y en el bloqueo no se puede poner
+  la visualización en vivo (Android solo admite carátula fija), por eso
+  se usan estos paisajes.
 - Widget de pantalla principal con anterior, play/pausa y siguiente.
 - Fondo claro con acentos neón (azul, rosa, rojo, verde, naranja,
-  amarillo, morado). Botones compactos de 36 dp que no se deforman en
+  amarillo, morado). Botones de icono de 48 dp que no se deforman en
   horizontal ni en vertical, y el encabezado con los controles se esconde
   al bajar sobre la lista de canciones (como en Biblia SL 1.2).
 

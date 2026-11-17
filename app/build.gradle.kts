@@ -11,8 +11,8 @@ android {
         applicationId = "com.fran.shenlongplaymusic"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     buildTypes {
@@ -52,6 +52,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     // Reproductor local (ExoPlayer / Media3). Sin internet: solo archivos del teléfono.
     implementation("androidx.media3:media3-exoplayer:1.3.1")
