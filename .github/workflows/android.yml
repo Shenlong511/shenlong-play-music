@@ -1,0 +1,36 @@
+name: Compilar APK (debug)
+
+# Compila la APK en la nube, sin instalar nada en tu computadora.
+# Se ejecuta al subir cambios a main y también a mano.
+# No se usa el paso de instalar el SDK: el runner de Ubuntu ya lo trae
+# instalado (ese paso fallaba con "Failed to find package 'tools'").
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Dar permiso al wrapper de Gradle
+        run: chmod +x gradlew
+
+      - name: Compilar la APK de prueba (debug)
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Subir la APK como archivo descargable
+        uses: actions/upload-artifact@v4
+        with:
+          name: shenlong-play-music-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

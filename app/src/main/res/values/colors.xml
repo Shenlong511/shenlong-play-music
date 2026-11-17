@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fondo claro de la app; los acentos neón se definen en MainActivity.kt -->
+    <color name="ic_launcher_background">#000000</color>
+</resources>
