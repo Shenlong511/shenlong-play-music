@@ -2,7 +2,6 @@ package com.fran.shenlongplaymusic
 
 import android.Manifest
 import android.graphics.Bitmap
-import android.util.Size
 import android.view.SurfaceView
 import android.content.ContentUris
 import android.content.Context
@@ -2845,7 +2844,7 @@ fun VideoThumbnail(video: VideoItem) {
         bitmap = withContext(Dispatchers.IO) {
             try {
                 if (Build.VERSION.SDK_INT >= 29) {
-                    context.contentResolver.loadThumbnail(video.uri, Size(160, 90), null)
+                    context.contentResolver.loadThumbnail(video.uri, android.util.Size(160, 90), null)
                 } else null
             } catch (e: Exception) {
                 null
