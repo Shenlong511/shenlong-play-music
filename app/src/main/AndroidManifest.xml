@@ -3,6 +3,8 @@
     <!-- Sin permiso de INTERNET: la música está en el teléfono y todo
          funciona sin conexión. -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Videos (Android 13+): permiso aparte del de audio. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -23,7 +25,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="Shenlong Play Music"
-            android:configChanges="orientation|screenSize|keyboardHidden">
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|pictureInPictureMode|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

@@ -13,10 +13,13 @@ Reproductor de música local para Android, sin internet.
   (botón + de cada canción), quitar canciones y borrar listas. Las listas
   y las carpetas ocultas se guardan en el teléfono (DataStore).
 - Botón de ajustes (engranaje) en el encabezado con menú desplegable:
-  Todas las canciones, Carpetas, Listas de reproducción, Color de
-  tarjetas, Visualización y Ecualizador.
-- Color de tarjetas: color fijo (9 colores) + deslizador de transparencia
-  0-100%, guardado en el teléfono (DataStore).
+  Todas las canciones, Carpetas, Listas de reproducción, Videos, Color de
+  tarjetas, Color de fondo, Visualización y Ecualizador. También tiene el
+  interruptor "Permitir giro de pantalla": apagado, la app queda fija en
+  vertical.
+- Color de tarjetas y Color de fondo: color fijo (17 colores, en una fila
+  con desplazamiento para que ninguno se corte) + deslizador de
+  transparencia 0-100%, guardados en el teléfono (DataStore).
 - Visualización con 4 estilos (Barras neón, Onda, Círculo y Espejo),
   elegibles en Ajustes > Visualización y guardados en el teléfono
   (DataStore). Al girar el teléfono a horizontal, la visualización ocupa
@@ -26,8 +29,16 @@ Reproductor de música local para Android, sin internet.
   tarjeta "Sonando ahora") para pasar a horizontal, y en horizontal el
   mismo giro vuelve a vertical.
 - Todos los botones de reproducción son iconos de tamaño fijo (48 dp,
-  icono de 24 dp dentro), sin letras: anterior, play/pausa, siguiente,
-  aleatorio y repetir.
+  icono de 24 dp dentro), sin letras, en una sola fila de 5 iconos:
+  aleatorio, anterior, play/pausa, siguiente y repetir.
+- Videos: sección "Videos" en el menú de ajustes con la lista de videos
+  del teléfono (MP4, MKV, WebM, 3GP y demás formatos comunes, con
+  miniatura) y reproducción a pantalla completa con ExoPlayer. El video
+  usa el mismo reproductor y servicio que la música: al cerrar la
+  pantalla, minimizar la app o apagar la pantalla, el audio sigue
+  sonando en segundo plano, con los controles en la notificación y en el
+  bloqueo. Al volver a la app, la tarjeta "Video en segundo plano" lo
+  retoma con "Ver video".
 - Aleatorio, repetir lista, repetir una canción, siguiente/anterior,
   play/pausa y barra de progreso.
 - Ecualizador de 5 bandas con presets: Normal, Rock, Pop, Jazz, Clásica,
@@ -68,3 +79,16 @@ Reproductor de música local para Android, sin internet.
   Media3 (ExoPlayer) 1.3.1.
 - Como cada APK de prueba tiene una firma distinta, para instalar una
   versión nueva hay que desinstalar primero la anterior.
+
+## Novedades de la 1.3 (Picture-in-Picture y cambio rápido)
+- Picture-in-Picture: con un video a pantalla completa, al pulsar el botón
+  de inicio el video sigue en una ventanita flotante por encima de otras
+  apps (se mueve y se cambia de tamaño arrastrando sus esquinas, como
+  permite Android). La ventanita lleva su botón play/pausa y al pulsarla
+  se vuelve a pantalla completa. Al poner música o cerrar el video, la app
+  sale de la ventanita. Requiere Android 8.0 o superior; en versiones
+  anteriores el video sigue solo con el audio en segundo plano.
+- Cambio rápido música / video: botón con icono en el encabezado (junto a
+  la lupa y el engranaje) que con un solo toque cambia entre la lista de
+  música y la de videos, sin entrar a Ajustes. Al cambiar se pausa lo que
+  esté sonando.

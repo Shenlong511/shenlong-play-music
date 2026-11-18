@@ -1,9 +1,17 @@
 package com.fran.shenlongplaymusic
 
 import android.Manifest
+import android.graphics.Bitmap
+import android.util.Size
+import android.view.SurfaceView
 import android.content.ContentUris
 import android.content.Context
 import android.app.Activity
+import android.app.PictureInPictureParams
+import android.app.RemoteAction
+import android.content.Intent
+import android.graphics.drawable.Icon
+import android.util.Rational
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -14,6 +22,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +32,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -58,6 +68,8 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -87,6 +99,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -113,6 +129,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -268,13 +285,21 @@ class PlaylistStore(private val context: Context) {
 
 val CardColorOptions: List<Pair<String, Color>> = listOf(
     "Blanco" to Color.White,
+    "Claro" to LightBg,
     "Azul" to NeonBlue,
-    "Rosa" to NeonPink,
-    "Rojo" to NeonRed,
+    "Celeste" to Color(0xFF4FC3F7),
+    "Turquesa" to Color(0xFF00BCD4),
     "Verde" to NeonGreen,
-    "Naranja" to NeonOrange,
+    "Lima" to Color(0xFF8BC34A),
     "Amarillo" to NeonYellow,
+    "Dorado" to Color(0xFFFFD700),
+    "Naranja" to NeonOrange,
+    "Rojo" to NeonRed,
+    "Rosa" to NeonPink,
+    "Fucsia" to Color(0xFFE040FB),
     "Morado" to NeonPurple,
+    "Marrón" to Color(0xFF795548),
+    "Gris" to Color(0xFF9E9E9E),
     "Negro" to Color.Black
 )
 
@@ -292,6 +317,45 @@ class CardColorSettings(private val context: Context) {
             prefs[colorKey] = colorName
             prefs[transparencyKey] = transparency.coerceIn(0f, 1f)
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Color de fondo de la app (DataStore, v1.3): igual que el de tarjetas,
+// color fijo + transparencia, aplicado al fondo general de la app.
+// Por defecto "Claro" (= LightBg), el fondo que ya tenía la app.
+// ---------------------------------------------------------------------------
+
+class BackgroundColorSettings(private val context: Context) {
+    private val colorKey = stringPreferencesKey("bg_color_name")
+    private val transparencyKey = floatPreferencesKey("bg_transparency")
+
+    val colorNameFlow: Flow<String> =
+        context.dataStore.data.map { it[colorKey] ?: "Claro" }
+    val transparencyFlow: Flow<Float> =
+        context.dataStore.data.map { (it[transparencyKey] ?: 0f).coerceIn(0f, 1f) }
+
+    suspend fun save(colorName: String, transparency: Float) {
+        context.dataStore.edit { prefs ->
+            prefs[colorKey] = colorName
+            prefs[transparencyKey] = transparency.coerceIn(0f, 1f)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Giro de pantalla (DataStore, v1.3): si está apagado, la app queda fija
+// en vertical y el botón de giro no hace nada.
+// ---------------------------------------------------------------------------
+
+class RotationSettings(private val context: Context) {
+    private val allowedKey = booleanPreferencesKey("rotation_allowed")
+
+    val allowedFlow: Flow<Boolean> =
+        context.dataStore.data.map { it[allowedKey] ?: true }
+
+    suspend fun save(allowed: Boolean) {
+        context.dataStore.edit { prefs -> prefs[allowedKey] = allowed }
     }
 }
 
@@ -546,6 +610,25 @@ object PlayerManager {
     var currentIndex: Int = -1
         private set
 
+    // Video en curso (v1.3): mismo ExoPlayer y mismo servicio que la
+    // música, así que el audio sigue en segundo plano. Cuando no es
+    // null, el reproductor está en modo video.
+    private val _currentVideo = MutableStateFlow<VideoItem?>(null)
+    val currentVideo: StateFlow<VideoItem?> = _currentVideo.asStateFlow()
+    var videoPlaylist: List<VideoItem> = emptyList()
+        private set
+    var currentVideoIndex: Int = -1
+        private set
+
+    fun pause() {
+        player?.pause()
+    }
+
+    /** Superficie donde se dibuja el video; null = solo audio (segundo plano). */
+    fun setVideoSurface(view: SurfaceView?) {
+        player?.setVideoSurfaceView(view)
+    }
+
     fun init(context: Context) {
         if (player != null) return
         val appContext = context.applicationContext
@@ -568,10 +651,20 @@ object PlayerManager {
                 }
 
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    val idx = mediaItem?.mediaId?.toIntOrNull()
-                    if (idx != null && idx in playlist.indices) {
-                        currentIndex = idx
-                        _currentSong.value = playlist[idx]
+                    val rawId = mediaItem?.mediaId
+                    if (rawId != null && rawId.startsWith("v")) {
+                        // Video: mediaId "v0", "v1"... (índice en videoPlaylist).
+                        val idx = rawId.removePrefix("v").toIntOrNull()
+                        if (idx != null && idx in videoPlaylist.indices) {
+                            currentVideoIndex = idx
+                            _currentVideo.value = videoPlaylist[idx]
+                        }
+                    } else {
+                        val idx = rawId?.toIntOrNull()
+                        if (idx != null && idx in playlist.indices) {
+                            currentIndex = idx
+                            _currentSong.value = playlist[idx]
+                        }
                     }
                     _durationMs.value = duration
                 }
@@ -603,6 +696,20 @@ object PlayerManager {
     fun loadPlaylist(songs: List<Song>, startIndex: Int, context: Context) {
         init(context)
         val p = player ?: return
+        // Al sonar una canción se sale del modo video (y se quita la
+        // imagen). Si el video estaba en la ventanita PiP, la app sale
+        // de la ventanita y vuelve a pantalla completa.
+        if (Build.VERSION.SDK_INT >= 26 && context is Activity &&
+            context.isInPictureInPictureMode
+        ) {
+            val intent = Intent(context, MainActivity::class.java)
+            intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            context.startActivity(intent)
+        }
+        _currentVideo.value = null
+        videoPlaylist = emptyList()
+        currentVideoIndex = -1
+        p.setVideoSurfaceView(null)
         playlist = songs
         currentIndex = startIndex.coerceIn(0, songs.size - 1)
         val items = songs.mapIndexed { i, song ->
@@ -637,6 +744,56 @@ object PlayerManager {
         if (idx >= 0) loadPlaylist(allSongs, idx, context)
     }
 
+    // ---- Video (v1.3): mismo reproductor y servicio que la música ----
+    // Al poner un video, la canción que sonaba se detiene sola porque es
+    // el mismo ExoPlayer; el servicio en primer plano mantiene el audio
+    // aunque se apague la pantalla o se minimice la app. La imagen solo
+    // se ve mientras la pantalla de video está abierta (superficie);
+    // al cerrarla se quita la superficie pero el audio sigue.
+    fun playVideo(context: Context, video: VideoItem, allVideos: List<VideoItem>) {
+        init(context)
+        val p = player ?: return
+        videoPlaylist = allVideos
+        currentVideoIndex = allVideos.indexOf(video).coerceAtLeast(0)
+        val items = allVideos.mapIndexed { i, item ->
+            MediaItem.Builder().setUri(item.uri).setMediaId("v$i")
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle(item.title)
+                        .setArtist("Video")
+                        .build()
+                )
+                .build()
+        }
+        p.setMediaItems(items, currentVideoIndex, 0)
+        p.prepare()
+        p.play()
+        _currentVideo.value = allVideos[currentVideoIndex]
+        MusicService.start(context)
+    }
+
+    fun nextVideo(context: Context) {
+        val p = player ?: return
+        if (videoPlaylist.isEmpty()) return
+        if (currentVideoIndex < videoPlaylist.size - 1) {
+            p.seekToNextMediaItem()
+            p.play()
+            MusicService.start(context)
+        }
+    }
+
+    fun previousVideo(context: Context) {
+        val p = player ?: return
+        if (videoPlaylist.isEmpty()) return
+        if (p.currentPosition > 3000) {
+            p.seekTo(0)
+        } else {
+            p.seekToPreviousMediaItem()
+        }
+        p.play()
+        MusicService.start(context)
+    }
+
     fun togglePlayPause(context: Context) {
         val p = player ?: return
         if (p.isPlaying) p.pause() else {
@@ -647,6 +804,10 @@ object PlayerManager {
 
     fun next(context: Context) {
         val p = player ?: return
+        if (_currentVideo.value != null) {
+            nextVideo(context)
+            return
+        }
         if (playlist.isEmpty()) return
         if (_shuffle.value) {
             val nextIdx = (playlist.indices - currentIndex).randomOrNull() ?: return
@@ -660,6 +821,10 @@ object PlayerManager {
 
     fun previous(context: Context) {
         val p = player ?: return
+        if (_currentVideo.value != null) {
+            previousVideo(context)
+            return
+        }
         if (playlist.isEmpty()) return
         if (p.currentPosition > 3000) {
             p.seekTo(0)
@@ -744,6 +909,63 @@ fun loadSongs(context: Context): List<Song> {
     return out
 }
 
+// ---------------------------------------------------------------------------
+// Videos del teléfono (MediaStore.Video, v1.3): MP4, MKV, WebM, 3GP y
+// demás formatos comunes los reproduce ExoPlayer sin nada extra.
+// Se usa el MISMO ExoPlayer y el MISMO servicio en primer plano que la
+// música, así que el audio del video sigue sonando en segundo plano
+// (al minimizar la app o apagar la pantalla), con los controles en la
+// notificación, como YouTube Premium. Al volver a la app se retoma la
+// imagen con "Ver video".
+// ---------------------------------------------------------------------------
+
+data class VideoItem(
+    val id: Long,
+    val title: String,
+    val durationMs: Long,
+    val uri: Uri,
+    val width: Int,
+    val height: Int
+)
+
+fun loadVideos(context: Context): List<VideoItem> {
+    val out = mutableListOf<VideoItem>()
+    val uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+    val projection = arrayOf(
+        MediaStore.Video.Media._ID,
+        MediaStore.Video.Media.TITLE,
+        MediaStore.Video.Media.DURATION,
+        MediaStore.Video.Media.WIDTH,
+        MediaStore.Video.Media.HEIGHT
+    )
+    val selection = "${MediaStore.Video.Media.DURATION} > 0"
+    val sort = "${MediaStore.Video.Media.TITLE} ASC"
+    try {
+        context.contentResolver.query(uri, projection, selection, null, sort)?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+            val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.TITLE)
+            val durCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
+            val widthCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH)
+            val heightCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
+            while (cursor.moveToNext()) {
+                out.add(
+                    VideoItem(
+                        id = cursor.getLong(idCol),
+                        title = cursor.getString(titleCol) ?: "Sin título",
+                        durationMs = cursor.getLong(durCol),
+                        uri = ContentUris.withAppendedId(uri, cursor.getLong(idCol)),
+                        width = cursor.getInt(widthCol),
+                        height = cursor.getInt(heightCol)
+                    )
+                )
+            }
+        }
+    } catch (e: Exception) {
+        // Sin permiso o sin videos: se devuelve la lista vacía y la UI lo explica.
+    }
+    return out
+}
+
 fun audioPermission(): String =
     if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO
     else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -764,9 +986,22 @@ fun hasNotificationPermission(context: Context): Boolean {
         PackageManager.PERMISSION_GRANTED
 }
 
-/** Permisos que se piden juntos al abrir la app: audio + notificaciones. */
+// Permiso de video (Android 13+): READ_MEDIA_VIDEO es un permiso aparte
+// de READ_MEDIA_AUDIO. En Android 12 o menos, el permiso de
+// almacenamiento (READ_EXTERNAL_STORAGE) ya cubre los videos.
+fun videoPermission(): String? =
+    if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_VIDEO else null
+
+fun hasVideoPermission(context: Context): Boolean {
+    val permission = videoPermission() ?: return hasAudioPermission(context)
+    return ContextCompat.checkSelfPermission(context, permission) ==
+        PackageManager.PERMISSION_GRANTED
+}
+
+/** Permisos que se piden juntos al abrir la app: audio + video + notificaciones. */
 fun permissionsToRequest(): Array<String> {
     val list = mutableListOf(audioPermission())
+    videoPermission()?.let { list.add(it) }
     notificationPermission()?.let { list.add(it) }
     return list.toTypedArray()
 }
@@ -776,10 +1011,92 @@ fun permissionsToRequest(): Array<String> {
 // ---------------------------------------------------------------------------
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        // Puente entre la Activity (onUserLeaveHint /
+        // onPictureInPictureModeChanged) y Compose: si la pantalla de
+        // video está abierta y si la app está en la ventanita PiP.
+        val isInPipFlow = MutableStateFlow(false)
+        var videoScreenOpen: Boolean = false
+    }
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         PlayerManager.init(this)
         setContent { ShenlongPlayMusicApp() }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Botón de inicio con un video reproduciéndose a pantalla
+        // completa: la app entra en modo Picture-in-Picture y el video
+        // sigue viéndose en una ventanita flotante por encima de otras
+        // apps, que Android deja mover y cambiar de tamaño arrastrando
+        // sus esquinas. Al pulsar la ventanita se vuelve a pantalla
+        // completa (acción por defecto de Android).
+        if (videoScreenOpen && PlayerManager.isPlaying.value) {
+            enterPip()
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        isInPipFlow.value = isInPictureInPictureMode
+        if (isInPictureInPictureMode) updatePipParams()
+    }
+
+    /** Parámetros PiP: ventana 16:9 con el botón play/pausa. */
+    private fun pipParams(): PictureInPictureParams? {
+        if (Build.VERSION.SDK_INT < 26) return null
+        val isPlaying = PlayerManager.isPlaying.value
+        val action = RemoteAction(
+            Icon.createWithResource(
+                this,
+                if (isPlaying) android.R.drawable.ic_media_pause
+                else android.R.drawable.ic_media_play
+            ),
+            if (isPlaying) "Pausa" else "Reproducir",
+            if (isPlaying) "Pausar el video" else "Reproducir el video",
+            MusicService.actionIntent(this, MusicService.ACTION_PLAY_PAUSE)
+        )
+        return PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(16, 9))
+            .setActions(listOf(action))
+            .build()
+    }
+
+    fun enterPip() {
+        if (Build.VERSION.SDK_INT < 26) return
+        if (isInPictureInPictureMode) return
+        try {
+            pipParams()?.let { enterPictureInPictureMode(it) }
+        } catch (e: Exception) {
+            // Si el teléfono no permite PiP (por ejemplo, está
+            // desactivado en ajustes), el video sigue en segundo plano
+            // solo con el audio, como ya hacía la v1.3.
+        }
+    }
+
+    /** Actualiza el botón play/pausa de la ventanita al cambiar el estado. */
+    fun updatePipParams() {
+        if (Build.VERSION.SDK_INT < 26) return
+        if (!isInPictureInPictureMode) return
+        try {
+            pipParams()?.let { setPictureInPictureParams(it) }
+        } catch (e: Exception) {
+            // Sin PiP activo no hay nada que actualizar.
+        }
+    }
+
+    /** Saca a la app de la ventanita PiP y la vuelve a pantalla completa. */
+    fun exitPip() {
+        if (Build.VERSION.SDK_INT < 26) return
+        if (!isInPictureInPictureMode) return
+        val intent = Intent(this, MainActivity::class.java)
+        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        startActivity(intent)
     }
 }
 
@@ -798,6 +1115,13 @@ fun ShenlongPlayMusicApp() {
     var selectedFolder by remember { mutableStateOf<String?>(null) }
     var showEq by remember { mutableStateOf(false) }
     var showPlaylists by remember { mutableStateOf(false) }
+    // Videos (v1.3): lista propia y video cuya pantalla está abierta.
+    // playingVideo == null pero currentVideo != null = video sonando en
+    // segundo plano (solo audio); se retoma con "Ver video".
+    var showVideos by remember { mutableStateOf(false) }
+    var videos by remember { mutableStateOf<List<VideoItem>>(emptyList()) }
+    var hasVideoPermission by remember { mutableStateOf(hasVideoPermission(context)) }
+    var playingVideo by remember { mutableStateOf<VideoItem?>(null) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var selectedPlaylist by remember { mutableStateOf<String?>(null) }
     var showHiddenFolders by remember { mutableStateOf(false) }
@@ -808,6 +1132,13 @@ fun ShenlongPlayMusicApp() {
     var cardColorName by remember { mutableStateOf("Blanco") }
     var cardTransparency by remember { mutableStateOf(0f) }
     var showCardColorDialog by remember { mutableStateOf(false) }
+    // Color de fondo (v1.3) y giro de pantalla (v1.3).
+    val bgColorSettings = remember { BackgroundColorSettings(context) }
+    var bgColorName by remember { mutableStateOf("Claro") }
+    var bgTransparency by remember { mutableStateOf(0f) }
+    var showBgColorDialog by remember { mutableStateOf(false) }
+    val rotationSettings = remember { RotationSettings(context) }
+    var rotationAllowed by remember { mutableStateOf(true) }
     val visualizerSettings = remember { VisualizerSettings(context) }
     var vizStyle by remember { mutableStateOf("Barras neón") }
     var showVizStyleDialog by remember { mutableStateOf(false) }
@@ -825,12 +1156,23 @@ fun ShenlongPlayMusicApp() {
         }
     }
     fun rotateToLandscape() {
+        if (!rotationAllowed) return
         pendingOrientation = Configuration.ORIENTATION_LANDSCAPE
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
     }
     fun rotateToPortrait() {
         pendingOrientation = Configuration.ORIENTATION_PORTRAIT
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
+    // Giro apagado (v1.3): la app queda fija en vertical. Al volver a
+    // activarlo se libera el bloqueo y el sensor vuelve a mandar.
+    LaunchedEffect(rotationAllowed) {
+        if (!rotationAllowed) {
+            pendingOrientation = null
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } else {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
     }
     val playlists by playlistStore.playlistsFlow.collectAsState(initial = emptyList())
     val hiddenFolders by playlistStore.hiddenFoldersFlow.collectAsState(initial = emptySet())
@@ -841,7 +1183,19 @@ fun ShenlongPlayMusicApp() {
     var eqBass by remember { mutableStateOf(0) }
 
     val currentSong by PlayerManager.currentSong.collectAsState()
+    val currentVideo by PlayerManager.currentVideo.collectAsState()
     val isPlaying by PlayerManager.isPlaying.collectAsState()
+    // Picture-in-Picture (v1.3): si estamos en la ventanita flotante,
+    // la pantalla de video esconde sus controles (la ventanita lleva
+    // solo su botón play/pausa) y al cambiar play/pausa se actualiza
+    // el botón de la ventanita.
+    val isInPip by MainActivity.isInPipFlow.collectAsState()
+    LaunchedEffect(playingVideo) {
+        MainActivity.videoScreenOpen = playingVideo != null
+    }
+    LaunchedEffect(isPlaying, isInPip) {
+        if (isInPip) (activity as? MainActivity)?.updatePipParams()
+    }
     val positionMs by PlayerManager.positionMs.collectAsState()
     val durationMs by PlayerManager.durationMs.collectAsState()
     val shuffle by PlayerManager.shuffle.collectAsState()
@@ -861,6 +1215,9 @@ fun ShenlongPlayMusicApp() {
         eqBass = eqSettings.bassFlow.first()
         cardColorName = cardColorSettings.colorNameFlow.first()
         cardTransparency = cardColorSettings.transparencyFlow.first()
+        bgColorName = bgColorSettings.colorNameFlow.first()
+        bgTransparency = bgColorSettings.transparencyFlow.first()
+        rotationAllowed = rotationSettings.allowedFlow.first()
         vizStyle = visualizerSettings.styleFlow.first()
         EqManager.setEnabled(eqEnabled)
         if (eqEnabled) {
@@ -885,6 +1242,14 @@ fun ShenlongPlayMusicApp() {
         scope.launch { cardColorSettings.save(cardColorName, cardTransparency) }
     }
 
+    fun saveBgColor() {
+        scope.launch { bgColorSettings.save(bgColorName, bgTransparency) }
+    }
+
+    fun saveRotation() {
+        scope.launch { rotationSettings.save(rotationAllowed) }
+    }
+
     fun saveVizStyle() {
         scope.launch { visualizerSettings.save(vizStyle) }
     }
@@ -893,30 +1258,45 @@ fun ShenlongPlayMusicApp() {
     // casi transparente (alpha 0). Se aplica a todas las tarjetas.
     val cardColor = CardColorOptions.firstOrNull { it.first == cardColorName }?.second ?: Color.White
     val cardBg = cardColor.copy(alpha = (1f - cardTransparency).coerceIn(0f, 1f))
+    // Color de fondo de la app (v1.3), igual: color fijo + transparencia.
+    val bgColor = CardColorOptions.firstOrNull { it.first == bgColorName }?.second ?: LightBg
+    val appBg = bgColor.copy(alpha = (1f - bgTransparency).coerceIn(0f, 1f))
 
     fun refreshSongs() {
         songs = loadSongs(context)
+    }
+
+    fun refreshVideos() {
+        videos = loadVideos(context)
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         hasPermission = result[audioPermission()] == true
+        hasVideoPermission = videoPermission()?.let { result[it] == true }
+            ?: (result[audioPermission()] == true)
         hasNotifPermission = notificationPermission()?.let { result[it] == true } ?: true
         if (hasPermission) refreshSongs()
+        if (hasVideoPermission) refreshVideos()
     }
 
-    // Al abrir la app se piden juntos audio + notificaciones (Android 13+).
-    // Sin el de notificaciones la música sigue sonando, pero Android no
-    // muestra los controles en la barra ni en la pantalla de bloqueo.
+    // Al abrir la app se piden juntos audio + video + notificaciones
+    // (Android 13+). Sin el de notificaciones la música sigue sonando,
+    // pero Android no muestra los controles en la barra ni en la pantalla
+    // de bloqueo.
     LaunchedEffect(Unit) {
-        if (!hasPermission || !hasNotifPermission) {
+        if (!hasPermission || !hasVideoPermission || !hasNotifPermission) {
             permissionLauncher.launch(permissionsToRequest())
         }
     }
 
     LaunchedEffect(hasPermission) {
         if (hasPermission) refreshSongs()
+    }
+
+    LaunchedEffect(hasVideoPermission) {
+        if (hasVideoPermission) refreshVideos()
     }
 
     // Lista visible: búsqueda + filtro por carpeta.
@@ -944,6 +1324,30 @@ fun ShenlongPlayMusicApp() {
             .sortedBy { File(it.first).name.lowercase() }
     }
 
+    // Video a pantalla completa (v1.3): la imagen ocupa toda la pantalla
+    // (en horizontal, toda la pantalla). Al cerrar la pantalla, el audio
+    // sigue sonando en segundo plano con el servicio de la música.
+    if (playingVideo != null) {
+        VideoPlayerScreen(
+            isLandscape = isLandscape,
+            isInPip = isInPip,
+            onClose = {
+                // Si se cierra el video estando en la ventanita PiP, la
+                // app sale de la ventanita y vuelve a pantalla completa.
+                (activity as? MainActivity)?.exitPip()
+                // Se quita la imagen (la superficie se suelta en el
+                // DisposableEffect) pero el audio sigue; se vuelve a la
+                // lista de música y el video se retoma con "Ver video".
+                playingVideo = null
+                showVideos = false; showFolders = false; showEq = false
+                showPlaylists = false
+                selectedFolder = null; selectedPlaylist = null
+            },
+            onRotate = { if (isLandscape) rotateToPortrait() else rotateToLandscape() }
+        )
+        return
+    }
+
     // En horizontal, la visualización ocupa TODA la pantalla: nada de
     // listas ni encabezado, solo el visualizador con sus controles.
     if (isLandscape) {
@@ -965,7 +1369,7 @@ fun ShenlongPlayMusicApp() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(LightBg)
+            .background(appBg)
     ) {
         // La lista ocupa toda la altura restante (weight 1f): el encabezado
         // y los controles van DENTRO de la LazyColumn, así que al bajar se
@@ -991,7 +1395,10 @@ fun ShenlongPlayMusicApp() {
                                 color = NeonPurple
                             )
                             Text(
-                                text = if (songs.isEmpty()) "Sin canciones todavía"
+                                text = if (showVideos) {
+                                    if (videos.isEmpty()) "Sin videos todavía"
+                                    else "${videos.size} videos en tu teléfono"
+                                } else if (songs.isEmpty()) "Sin canciones todavía"
                                 else "${songs.size} canciones en tu teléfono",
                                 fontSize = 12.sp,
                                 color = Color.DarkGray
@@ -1017,6 +1424,7 @@ fun ShenlongPlayMusicApp() {
                                     text = { Text("Todas las canciones", fontSize = 14.sp) },
                                     onClick = {
                                         showFolders = false; showEq = false; showPlaylists = false
+                                        showVideos = false
                                         selectedFolder = null; selectedPlaylist = null
                                         showSettingsMenu = false
                                     }
@@ -1025,6 +1433,7 @@ fun ShenlongPlayMusicApp() {
                                     text = { Text("Carpetas", fontSize = 14.sp) },
                                     onClick = {
                                         showFolders = true; showEq = false; showPlaylists = false
+                                        showVideos = false
                                         selectedPlaylist = null
                                         showSettingsMenu = false
                                     }
@@ -1033,8 +1442,19 @@ fun ShenlongPlayMusicApp() {
                                     text = { Text("Listas de reproducción", fontSize = 14.sp) },
                                     onClick = {
                                         showPlaylists = true; showFolders = false; showEq = false
+                                        showVideos = false
                                         selectedFolder = null
                                         showSettingsMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Videos", fontSize = 14.sp) },
+                                    onClick = {
+                                        showVideos = true; showFolders = false; showEq = false
+                                        showPlaylists = false
+                                        selectedFolder = null; selectedPlaylist = null
+                                        showSettingsMenu = false
+                                        if (hasVideoPermission) refreshVideos()
                                     }
                                 )
                                 DropdownMenuItem(
@@ -1042,6 +1462,41 @@ fun ShenlongPlayMusicApp() {
                                     onClick = {
                                         showCardColorDialog = true
                                         showSettingsMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Color de fondo", fontSize = 14.sp) },
+                                    onClick = {
+                                        showBgColorDialog = true
+                                        showSettingsMenu = false
+                                    }
+                                )
+                                // Giro de pantalla (v1.3): interruptor dentro
+                                // del menú. Apagado, la app queda fija en
+                                // vertical; encendido, gira como siempre.
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Permitir giro de pantalla",
+                                                fontSize = 14.sp,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Switch(
+                                                checked = rotationAllowed,
+                                                onCheckedChange = { checked ->
+                                                    rotationAllowed = checked
+                                                    saveRotation()
+                                                }
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        rotationAllowed = !rotationAllowed
+                                        saveRotation()
                                     }
                                 )
                                 DropdownMenuItem(
@@ -1055,6 +1510,7 @@ fun ShenlongPlayMusicApp() {
                                     text = { Text("Ecualizador", fontSize = 14.sp) },
                                     onClick = {
                                         showEq = true; showFolders = false; showPlaylists = false
+                                        showVideos = false
                                         selectedPlaylist = null
                                         showSettingsMenu = false
                                     }
@@ -1077,15 +1533,45 @@ fun ShenlongPlayMusicApp() {
                                 if (!showSearch) query = ""
                             }
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
                         // Giro de pantalla: en vertical gira a horizontal
                         // para ver la visualización a pantalla completa.
+                        // Si el giro está desactivado en Ajustes, el botón
+                        // no aparece (v1.3).
+                        if (rotationAllowed) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            TransportIconButton(
+                                icon = Icons.Default.ScreenRotation,
+                                description = "Ver a pantalla completa",
+                                color = NeonGreen,
+                                selected = false,
+                                onClick = { rotateToLandscape() }
+                            )
+                        }
+                        // Cambio rápido música / video (v1.3): un solo
+                        // toque cambia entre la lista de música y la de
+                        // videos, sin entrar al menú de ajustes. Al
+                        // cambiar se pausa lo que esté sonando (la música
+                        // si se va a video y el video si se vuelve a
+                        // música); para ver un video se pulsa en la lista.
+                        Spacer(modifier = Modifier.width(6.dp))
                         TransportIconButton(
-                            icon = Icons.Default.ScreenRotation,
-                            description = "Ver a pantalla completa",
-                            color = NeonGreen,
-                            selected = false,
-                            onClick = { rotateToLandscape() }
+                            icon = if (showVideos) Icons.Default.MusicNote else Icons.Default.Videocam,
+                            description = if (showVideos) "Ver música" else "Ver videos",
+                            color = NeonPink,
+                            selected = showVideos,
+                            onClick = {
+                                PlayerManager.pause()
+                                showSearch = false; query = ""
+                                if (showVideos) {
+                                    showVideos = false
+                                    selectedFolder = null; selectedPlaylist = null
+                                } else {
+                                    showVideos = true; showFolders = false; showEq = false
+                                    showPlaylists = false
+                                    selectedFolder = null; selectedPlaylist = null
+                                    if (hasVideoPermission) refreshVideos()
+                                }
+                            }
                         )
                     }
                     if (showSearch) {
@@ -1136,33 +1622,6 @@ fun ShenlongPlayMusicApp() {
                             Text("Dar permiso de notificaciones", fontSize = 12.sp)
                         }
                     }
-                    if (!showEq) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        // Aleatorio y repetir: solo iconos, botones de
-                        // tamaño fijo (48 dp, icono 24 dp), centrados en
-                        // la fila, sin estirar a todo el ancho.
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TransportIconButton(
-                                icon = Icons.Default.Shuffle,
-                                description = if (shuffle) "Aleatorio activado" else "Aleatorio",
-                                color = NeonOrange,
-                                selected = shuffle,
-                                onClick = { PlayerManager.toggleShuffle() }
-                            )
-                            Spacer(modifier = Modifier.width(24.dp))
-                            TransportIconButton(
-                                icon = if (repeatMode == 2) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                                description = PlayerManager.repeatLabel(),
-                                color = NeonRed,
-                                selected = repeatMode != 0,
-                                onClick = { PlayerManager.cycleRepeat() }
-                            )
-                        }
-                    }
                 }
             }
 
@@ -1176,12 +1635,59 @@ fun ShenlongPlayMusicApp() {
                         isPlaying = isPlaying,
                         positionMs = positionMs,
                         durationMs = durationMs,
+                        shuffle = shuffle,
+                        repeatMode = repeatMode,
                         onToggle = { PlayerManager.togglePlayPause(context) },
                         onNext = { PlayerManager.next(context) },
                         onPrevious = { PlayerManager.previous(context) },
                         onSeek = { PlayerManager.seekTo(it) },
-                        onRotate = { rotateToLandscape() }
+                        onToggleShuffle = { PlayerManager.toggleShuffle() },
+                        onCycleRepeat = { PlayerManager.cycleRepeat() }
                     )
+                }
+            }
+
+            // ---- Video sonando en segundo plano (v1.3): el audio sigue
+            // aunque se haya cerrado la pantalla de video. Al pulsar la
+            // tarjeta se vuelve a abrir el video y se retoma la imagen.
+            if (currentVideo != null && playingVideo == null && !showEq) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .background(cardBg, RoundedCornerShape(12.dp))
+                            .clickable { playingVideo = currentVideo }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Videocam,
+                            contentDescription = null,
+                            tint = NeonPurple,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Video en segundo plano",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = NeonPurple
+                            )
+                            Text(
+                                text = "${currentVideo!!.title} • toca para ver el video",
+                                fontSize = 12.sp,
+                                color = Color.DarkGray
+                            )
+                        }
+                        ActionIconButton(
+                            icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            description = if (isPlaying) "Pausa" else "Reproducir",
+                            color = NeonPurple,
+                            onClick = { PlayerManager.togglePlayPause(context) }
+                        )
+                    }
                 }
             }
 
@@ -1563,7 +2069,7 @@ fun ShenlongPlayMusicApp() {
             }
 
             // ---- Lista de canciones ----
-            if (!showFolders && !showEq && !showPlaylists) {
+            if (!showFolders && !showEq && !showPlaylists && !showVideos) {
                 items(visibleSongs) { song ->
                     val neon = NeonColors[(song.id % NeonColors.size).toInt()]
                     Row(
@@ -1611,6 +2117,68 @@ fun ShenlongPlayMusicApp() {
                             onClick = { addToPlaylistSong = song }
                         )
                         Text(text = formatTime(song.durationMs), fontSize = 12.sp, color = Color.DarkGray)
+                    }
+                }
+            }
+            // ---- Lista de videos (v1.3) ----
+            if (showVideos && !showEq) {
+                if (!hasVideoPermission) {
+                    item {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Para ver tus videos, la app necesita el permiso de videos.",
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { permissionLauncher.launch(permissionsToRequest()) },
+                                colors = ButtonDefaults.buttonColors(containerColor = NeonBlue),
+                                modifier = Modifier.height(36.dp)
+                            ) {
+                                Text("Dar permiso de videos", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                } else if (videos.isEmpty()) {
+                    item {
+                        Text(
+                            text = "No se encontraron videos en el teléfono. " +
+                                "Copia videos (MP4, MKV, WebM, 3GP…) a tu teléfono y vuelve a abrir la app.",
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                } else {
+                    items(videos) { video ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 3.dp)
+                                .background(cardBg, RoundedCornerShape(12.dp))
+                                .clickable {
+                                    PlayerManager.playVideo(context, video, videos)
+                                    playingVideo = video
+                                }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            VideoThumbnail(video = video)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = video.title,
+                                    fontSize = 14.sp,
+                                    fontWeight = if (video == currentVideo) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (video == currentVideo) NeonPurple else Color.Black
+                                )
+                                Text(
+                                    text = "Video • ${formatTime(video.durationMs)}",
+                                    fontSize = 12.sp,
+                                    color = Color.DarkGray
+                                )
+                            }
+                            Text(text = formatTime(video.durationMs), fontSize = 12.sp, color = Color.DarkGray)
+                        }
                     }
                 }
             }
@@ -1732,28 +2300,16 @@ fun ShenlongPlayMusicApp() {
                     Column {
                         Text("Elige un color fijo:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            CardColorOptions.forEach { (name, color) ->
-                                val selected = name == cardColorName
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .border(
-                                            width = if (selected) 3.dp else 1.dp,
-                                            color = if (selected) Color.Black else Color.Gray,
-                                            shape = CircleShape
-                                        )
-                                        .background(color, CircleShape)
-                                        .clickable {
-                                            cardColorName = name
-                                            saveCardColor()
-                                        }
-                                )
+                        // Fila con desplazamiento horizontal (v1.3): ahora
+                        // hay 17 colores y ninguno se corta; se desliza
+                        // para ver los que siguen (amarillo, morado, negro…).
+                        ColorPickerRow(
+                            selectedName = cardColorName,
+                            onSelect = { name ->
+                                cardColorName = name
+                                saveCardColor()
                             }
-                        }
+                        )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(text = "Color: $cardColorName", fontSize = 12.sp, color = Color.DarkGray)
                         Spacer(modifier = Modifier.height(12.dp))
@@ -1791,6 +2347,64 @@ fun ShenlongPlayMusicApp() {
                     TextButton(onClick = {
                         saveCardColor()
                         showCardColorDialog = false
+                    }) { Text("Listo", fontSize = 12.sp) }
+                }
+            )
+        }
+
+        // ---- Diálogo de color de fondo: igual que el de tarjetas ----
+        if (showBgColorDialog) {
+            AlertDialog(
+                onDismissRequest = { showBgColorDialog = false },
+                title = { Text("Color de fondo", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("Elige un color fijo:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        ColorPickerRow(
+                            selectedName = bgColorName,
+                            onSelect = { name ->
+                                bgColorName = name
+                                saveBgColor()
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(text = "Color: $bgColorName", fontSize = 12.sp, color = Color.DarkGray)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Transparencia: ${(bgTransparency * 100).toInt()}%",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "0% = fondo opaco, 100% = casi transparente.",
+                            fontSize = 12.sp,
+                            color = Color.DarkGray
+                        )
+                        Slider(
+                            value = bgTransparency,
+                            onValueChange = { bgTransparency = it },
+                            onValueChangeFinished = { saveBgColor() },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        // Vista previa con el color y la transparencia elegidos.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .background(appBg, RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(text = "Así se ve el fondo", fontSize = 12.sp)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        saveBgColor()
+                        showBgColorDialog = false
                     }) { Text("Listo", fontSize = 12.sp) }
                 }
             )
@@ -2218,6 +2832,203 @@ fun FullscreenVisualizer(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Miniatura de video (MediaStore, v1.3): se carga perezosa por fila con
+// loadThumbnail (Android 9+); si no hay miniatura, icono de video.
+// ---------------------------------------------------------------------------
+
+@Composable
+fun VideoThumbnail(video: VideoItem) {
+    val context = LocalContext.current
+    var bitmap by remember(video.id) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(video.id) {
+        bitmap = withContext(Dispatchers.IO) {
+            try {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    context.contentResolver.loadThumbnail(video.uri, Size(160, 90), null)
+                } else null
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap!!.asImageBitmap(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(64.dp, 36.dp)
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(64.dp, 36.dp)
+                .background(NeonPurple.copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Videocam,
+                contentDescription = null,
+                tint = NeonPurple,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pantalla de video a pantalla completa (v1.3): el video se dibuja en un
+// SurfaceView sobre el MISMO ExoPlayer de la música, así que al salir de
+// esta pantalla (o apagar la pantalla, o minimizar la app) el audio sigue
+// sonando por el servicio en primer plano, con los controles en la
+// notificación. Al volver a abrirla, la superficie se vuelve a enganchar
+// y se retoma la imagen. Al pulsar en cualquier lugar aparecen o se
+// esconden los controles (como en la visualización a pantalla completa),
+// que también se esconden solos a los 3 segundos.
+// ---------------------------------------------------------------------------
+
+@Composable
+fun VideoPlayerScreen(
+    isLandscape: Boolean,
+    isInPip: Boolean = false,
+    onClose: () -> Unit,
+    onRotate: () -> Unit
+) {
+    val context = LocalContext.current
+    val video by PlayerManager.currentVideo.collectAsState()
+    val isPlaying by PlayerManager.isPlaying.collectAsState()
+    val positionMs by PlayerManager.positionMs.collectAsState()
+    val durationMs by PlayerManager.durationMs.collectAsState()
+    var showControls by remember { mutableStateOf(true) }
+    // El botón de atrás del teléfono también cierra la pantalla (el
+    // audio sigue en segundo plano, como al pulsar la X). En la
+    // ventanita PiP no hay botón de atrás: se sale pulsando la ventana.
+    BackHandler(enabled = !isInPip) { onClose() }
+    LaunchedEffect(showControls, isInPip) {
+        if (showControls && !isInPip) {
+            delay(3000)
+            showControls = false
+        }
+    }
+    // Al salir de la pantalla se suelta la superficie (se quita la
+    // imagen) pero el reproductor NO se detiene: el audio sigue.
+    DisposableEffect(Unit) {
+        onDispose { PlayerManager.setVideoSurface(null) }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .clickable { showControls = !showControls }
+    ) {
+        AndroidView(
+            factory = { ctx -> SurfaceView(ctx) },
+            update = { view -> PlayerManager.setVideoSurface(view) },
+            modifier = Modifier.fillMaxSize()
+        )
+        // En la ventanita PiP no se dibujan los controles de pantalla
+        // completa: la ventanita lleva solo su botón play/pausa y al
+        // pulsarla se vuelve a pantalla completa. La superficie del
+        // video sigue enganchada, así que la imagen sigue viéndose.
+        if (showControls && !isInPip) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = video?.title ?: "Video",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Video • ${formatTime(durationMs)}",
+                            fontSize = 12.sp,
+                            color = Color.LightGray
+                        )
+                    }
+                    TransportIconButton(
+                        icon = Icons.Default.ScreenRotation,
+                        description = "Girar pantalla",
+                        color = Color.White,
+                        selected = true,
+                        onClick = onRotate
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    TransportIconButton(
+                        icon = Icons.Default.Close,
+                        description = "Cerrar video",
+                        color = Color.White,
+                        selected = true,
+                        onClick = onClose
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                Slider(
+                    value = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,
+                    onValueChange = { fraction ->
+                        if (durationMs > 0) PlayerManager.seekTo((fraction * durationMs).toLong())
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(text = formatTime(positionMs), fontSize = 12.sp, color = Color.White)
+                    Text(text = formatTime(durationMs), fontSize = 12.sp, color = Color.White)
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TransportIconButton(
+                        icon = Icons.Default.SkipPrevious,
+                        description = "Video anterior",
+                        color = NeonBlue,
+                        selected = true,
+                        onClick = { PlayerManager.previous(context) }
+                    )
+                    Spacer(modifier = Modifier.width(24.dp))
+                    TransportIconButton(
+                        icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        description = if (isPlaying) "Pausa" else "Reproducir",
+                        color = NeonPurple,
+                        selected = true,
+                        onClick = { PlayerManager.togglePlayPause(context) }
+                    )
+                    Spacer(modifier = Modifier.width(24.dp))
+                    TransportIconButton(
+                        icon = Icons.Default.SkipNext,
+                        description = "Video siguiente",
+                        color = NeonBlue,
+                        selected = true,
+                        onClick = { PlayerManager.next(context) }
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Si sales con el botón de inicio, el video sigue " +
+                        "en una ventanita flotante. Si sales de esta " +
+                        "pantalla o apagas la pantalla, el audio sigue " +
+                        "sonando. Vuelve a la app y toca \"Ver video\" " +
+                        "para retomar la imagen.",
+                    fontSize = 12.sp,
+                    color = Color.LightGray
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun NowPlayingCard(
     cardColor: Color,
@@ -2226,11 +3037,14 @@ fun NowPlayingCard(
     isPlaying: Boolean,
     positionMs: Long,
     durationMs: Long,
+    shuffle: Boolean,
+    repeatMode: Int,
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onSeek: (Long) -> Unit,
-    onRotate: () -> Unit
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -2259,14 +3073,23 @@ fun NowPlayingCard(
             Text(text = formatTime(durationMs), fontSize = 12.sp)
         }
         Spacer(modifier = Modifier.height(6.dp))
-        // Controles de reproducción: solo iconos, botones de tamaño fijo
-        // (48 dp en total, icono de 24 dp dentro), centrados en la fila,
-        // sin estirar a todo el ancho y sin letras.
+        // Controles de reproducción (v1.3): una sola fila de 5 iconos
+        // compactos — aleatorio, anterior, play/pausa, siguiente, repetir
+        // — todos de 48 dp con icono de 24 dp, sin letras y sin ocupar
+        // más espacio arriba. El giro quedó solo en el encabezado.
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            TransportIconButton(
+                icon = Icons.Default.Shuffle,
+                description = if (shuffle) "Aleatorio activado" else "Aleatorio",
+                color = NeonOrange,
+                selected = shuffle,
+                onClick = onToggleShuffle
+            )
+            Spacer(modifier = Modifier.width(12.dp))
             TransportIconButton(
                 icon = Icons.Default.SkipPrevious,
                 description = "Anterior",
@@ -2274,7 +3097,7 @@ fun NowPlayingCard(
                 selected = false,
                 onClick = onPrevious
             )
-            Spacer(modifier = Modifier.width(24.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             TransportIconButton(
                 icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 description = if (isPlaying) "Pausa" else "Reproducir",
@@ -2282,7 +3105,7 @@ fun NowPlayingCard(
                 selected = true,
                 onClick = onToggle
             )
-            Spacer(modifier = Modifier.width(24.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             TransportIconButton(
                 icon = Icons.Default.SkipNext,
                 description = "Siguiente",
@@ -2290,13 +3113,48 @@ fun NowPlayingCard(
                 selected = false,
                 onClick = onNext
             )
-            Spacer(modifier = Modifier.width(24.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             TransportIconButton(
-                icon = Icons.Default.ScreenRotation,
-                description = "Ver a pantalla completa",
-                color = NeonGreen,
-                selected = false,
-                onClick = onRotate
+                icon = if (repeatMode == 2) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                description = PlayerManager.repeatLabel(),
+                color = NeonRed,
+                selected = repeatMode != 0,
+                onClick = onCycleRepeat
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fila de colores con desplazamiento horizontal (v1.3): los 17 colores
+// fijos en círculos de 36 dp; se desliza para ver todos sin que ninguno
+// se corte a la derecha. La usan los diálogos de color de tarjetas y
+// de color de fondo.
+// ---------------------------------------------------------------------------
+
+@Composable
+fun ColorPickerRow(
+    selectedName: String,
+    onSelect: (String) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        CardColorOptions.forEach { (name, color) ->
+            val selected = name == selectedName
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .border(
+                        width = if (selected) 3.dp else 1.dp,
+                        color = if (selected) Color.Black else Color.Gray,
+                        shape = CircleShape
+                    )
+                    .background(color, CircleShape)
+                    .clickable { onSelect(name) }
             )
         }
     }

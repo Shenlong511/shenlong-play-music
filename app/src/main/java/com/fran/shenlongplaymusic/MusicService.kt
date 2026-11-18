@@ -130,6 +130,11 @@ class MusicService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        // En modo video (v1.3) la notificación muestra el título del video
+        // y un paisaje como carátula, con los mismos controles: así el
+        // audio del video sigue en segundo plano y se puede pausar o
+        // seguir desde la barra o la pantalla de bloqueo.
+        val video = PlayerManager.currentVideo.value
         val song = PlayerManager.currentSong.value
         val isPlaying = PlayerManager.isPlaying.value
         val activityIntent = Intent(this, MainActivity::class.java)
@@ -140,15 +145,21 @@ class MusicService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(song?.title ?: "Shenlong Play Music")
-            .setContentText(song?.artist ?: "Toca para abrir la app")
+            .setContentTitle(video?.title ?: song?.title ?: "Shenlong Play Music")
+            .setContentText(
+                if (video != null) "Video • Toca para abrir la app"
+                else (song?.artist ?: "Toca para abrir la app")
+            )
             .setSmallIcon(R.mipmap.ic_launcher)
-            // Carátula: el paisaje de la canción actual. Android no permite
-            // animación en vivo en la notificación ni en el bloqueo, así
-            // que el paisaje es una imagen fija que cambia con cada canción
-            // (al pulsar siguiente/anterior se reconstruye la notificación
-            // con el paisaje de la canción nueva).
-            .setLargeIcon(song?.let { LandscapeArt.bitmapForSong(it) })
+            // Carátula: el paisaje de la canción actual (o del video).
+            // Android no permite animación en vivo en la notificación ni
+            // en el bloqueo, así que el paisaje es una imagen fija que
+            // cambia con cada canción o video (al pulsar siguiente/anterior
+            // se reconstruye la notificación con el paisaje nuevo).
+            .setLargeIcon(
+                video?.let { LandscapeArt.bitmap((it.id % LandscapeArt.COUNT).toInt()) }
+                    ?: song?.let { LandscapeArt.bitmapForSong(it) }
+            )
             .setContentIntent(contentIntent)
             .setOngoing(isPlaying)
             .setOnlyAlertOnce(true)
