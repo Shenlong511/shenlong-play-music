@@ -2,6 +2,7 @@ package com.fran.shenlongplaymusic
 
 import android.Manifest
 import android.graphics.Bitmap
+import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.content.ContentUris
 import android.content.Context
@@ -37,6 +38,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -58,6 +60,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlaylistAdd
@@ -72,6 +75,7 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -112,6 +116,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.mediarouter.app.MediaRouteButton
+import com.google.android.gms.cast.framework.CastContext
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -623,8 +629,49 @@ object PlayerManager {
         player?.pause()
     }
 
+    /**
+     * STOP de verdad (v1.4): detiene por completo la reproducción, tanto
+     * de música como de video. No es pausa: se para el reproductor, se
+     * libera la cola (lista y video) y se borra lo que estaba sonando,
+     * así que la notificación y la tarjeta "Sonando ahora" desaparecen.
+     * El servicio se quita con MusicService.stop(context).
+     */
+    fun stopPlayback() {
+        val p = player
+        p?.stop()
+        p?.clearMediaItems()
+        p?.setVideoSurfaceView(null)
+        lastVideoSurface = null
+        playlist = emptyList()
+        currentIndex = -1
+        videoPlaylist = emptyList()
+        currentVideoIndex = -1
+        _currentSong.value = null
+        _currentVideo.value = null
+        _positionMs.value = 0L
+        _durationMs.value = 0L
+        _isPlaying.value = false
+        VisualizerManager.setPlaying(false)
+    }
+
     /** Superficie donde se dibuja el video; null = solo audio (segundo plano). */
+    private var lastVideoSurface: SurfaceView? = null
+
     fun setVideoSurface(view: SurfaceView?) {
+        lastVideoSurface = view
+        player?.setVideoSurfaceView(view)
+    }
+
+    /**
+     * Reengancha la imagen del video (v1.4): al volver de la ventanita
+     * flotante (PiP) a la app, Android puede haber soltado la superficie
+     * del SurfaceView; sin volver a engancharla, el video sigue solo con
+     * el audio. Se llama al salir del modo PiP y cuando se crea una
+     * superficie nueva (SurfaceHolder.Callback en las pantallas de video).
+     */
+    fun reattachVideoSurface() {
+        val view = lastVideoSurface ?: return
+        player?.setVideoSurfaceView(null)
         player?.setVideoSurfaceView(view)
     }
 
@@ -752,6 +799,12 @@ object PlayerManager {
     fun playVideo(context: Context, video: VideoItem, allVideos: List<VideoItem>) {
         init(context)
         val p = player ?: return
+        // Al poner un video, la canción que sonaba se DETIENE por
+        // completo (v1.4): se borra la lista de música y lo que sonaba,
+        // no solo se pausa.
+        _currentSong.value = null
+        playlist = emptyList()
+        currentIndex = -1
         videoPlaylist = allVideos
         currentVideoIndex = allVideos.indexOf(video).coerceAtLeast(0)
         val items = allVideos.mapIndexed { i, item ->
@@ -924,8 +977,15 @@ data class VideoItem(
     val durationMs: Long,
     val uri: Uri,
     val width: Int,
-    val height: Int
-)
+    val height: Int,
+    // Carpeta del video (v1.4): los videos se agrupan por carpeta como
+    // la música y se pueden ocultar/mostrar con las mismas carpetas
+    // ocultas.
+    val folder: String
+) {
+    val folderName: String
+        get() = File(folder).name.ifBlank { "Sin carpeta" }
+}
 
 fun loadVideos(context: Context): List<VideoItem> {
     val out = mutableListOf<VideoItem>()
@@ -935,7 +995,8 @@ fun loadVideos(context: Context): List<VideoItem> {
         MediaStore.Video.Media.TITLE,
         MediaStore.Video.Media.DURATION,
         MediaStore.Video.Media.WIDTH,
-        MediaStore.Video.Media.HEIGHT
+        MediaStore.Video.Media.HEIGHT,
+        MediaStore.Video.Media.DATA
     )
     val selection = "${MediaStore.Video.Media.DURATION} > 0"
     val sort = "${MediaStore.Video.Media.TITLE} ASC"
@@ -946,6 +1007,7 @@ fun loadVideos(context: Context): List<VideoItem> {
             val durCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
             val widthCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH)
             val heightCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
+            val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
             while (cursor.moveToNext()) {
                 out.add(
                     VideoItem(
@@ -954,7 +1016,8 @@ fun loadVideos(context: Context): List<VideoItem> {
                         durationMs = cursor.getLong(durCol),
                         uri = ContentUris.withAppendedId(uri, cursor.getLong(idCol)),
                         width = cursor.getInt(widthCol),
-                        height = cursor.getInt(heightCol)
+                        height = cursor.getInt(heightCol),
+                        folder = File(cursor.getString(dataCol) ?: "").parent ?: ""
                     )
                 )
             }
@@ -1021,6 +1084,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         PlayerManager.init(this)
+        // Transmisión Cast (v1.4): escucha si se conecta una TV.
+        CastManager.init(this)
         setContent { ShenlongPlayMusicApp() }
     }
 
@@ -1044,6 +1109,13 @@ class MainActivity : ComponentActivity() {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         isInPipFlow.value = isInPictureInPictureMode
         if (isInPictureInPictureMode) updatePipParams()
+        else {
+            // Al volver de la ventanita a la app (v1.4): se vuelve a
+            // enganchar la imagen del video, que si no solo sonaría el
+            // audio. La pantalla de video también lo reengancha al
+            // recomponerse (LaunchedEffect en isInPip).
+            PlayerManager.reattachVideoSurface()
+        }
     }
 
     /** Parámetros PiP: ventana 16:9 con el botón play/pausa. */
@@ -1121,6 +1193,12 @@ fun ShenlongPlayMusicApp() {
     var videos by remember { mutableStateOf<List<VideoItem>>(emptyList()) }
     var hasVideoPermission by remember { mutableStateOf(hasVideoPermission(context)) }
     var playingVideo by remember { mutableStateOf<VideoItem?>(null) }
+    // ¿Estaba abierta la pantalla de video al entrar en la ventanita
+    // PiP? Solo en ese caso se vuelve a abrir al salir de PiP (v1.4):
+    // si el usuario cerró el video a propósito, no se reabre.
+    var pipVideoScreenOpen by remember { mutableStateOf(false) }
+    // Carpeta de videos elegida (v1.4): null = lista de carpetas.
+    var selectedVideoFolder by remember { mutableStateOf<String?>(null) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var selectedPlaylist by remember { mutableStateOf<String?>(null) }
     var showHiddenFolders by remember { mutableStateOf(false) }
@@ -1194,6 +1272,18 @@ fun ShenlongPlayMusicApp() {
     }
     LaunchedEffect(isPlaying, isInPip) {
         if (isInPip) (activity as? MainActivity)?.updatePipParams()
+    }
+    // Al volver de la ventanita flotante (v1.4): si había un video
+    // sonando y la pantalla de video se había perdido, se vuelve a
+    // abrir para que se VEA el video y no solo se oiga el audio.
+    // También se reengancha la superficie (ver reattachVideoSurface).
+    LaunchedEffect(isInPip) {
+        if (isInPip) {
+            pipVideoScreenOpen = playingVideo != null
+        } else if (pipVideoScreenOpen && currentVideo != null && playingVideo == null) {
+            playingVideo = currentVideo
+            pipVideoScreenOpen = false
+        }
     }
     val positionMs by PlayerManager.positionMs.collectAsState()
     val durationMs by PlayerManager.durationMs.collectAsState()
@@ -1322,26 +1412,55 @@ fun ShenlongPlayMusicApp() {
             .groupBy { it.folder }.map { (folder, list) -> folder to list.size }
             .sortedBy { File(it.first).name.lowercase() }
     }
+    // Carpetas de videos (v1.4): igual que las de música, con las
+    // mismas carpetas ocultas (ocultar una carpeta la quita de música
+    // y de videos a la vez).
+    val videoFolders = remember(videos, hiddenFolders) {
+        videos.filter { it.folder !in hiddenFolders }
+            .groupBy { it.folder }.map { (folder, list) -> folder to list.size }
+            .sortedBy { File(it.first).name.lowercase() }
+    }
+    val selectedVideoVideos = remember(videos, selectedVideoFolder, hiddenFolders) {
+        videos.filter { it.folder == selectedVideoFolder && it.folder !in hiddenFolders }
+    }
 
-    // Video a pantalla completa (v1.3): la imagen ocupa toda la pantalla
-    // (en horizontal, toda la pantalla). Al cerrar la pantalla, el audio
-    // sigue sonando en segundo plano con el servicio de la música.
-    if (playingVideo != null) {
+    // Cerrar la pantalla de video (v1.3): se quita la imagen pero el
+    // audio sigue en segundo plano; se vuelve a la lista y el video se
+    // retoma con "Ver video". No se reabre al salir de PiP porque se
+    // marca pipVideoScreenOpen = false antes de salir de la ventanita.
+    fun closeVideoScreen() {
+        pipVideoScreenOpen = false
+        (activity as? MainActivity)?.exitPip()
+        playingVideo = null
+        showVideos = false; showFolders = false; showEq = false
+        showPlaylists = false
+        selectedFolder = null; selectedPlaylist = null
+        selectedVideoFolder = null
+    }
+
+    // Detener el video por completo (v1.4) y volver a la lista de videos.
+    fun stopVideoScreen() {
+        pipVideoScreenOpen = false
+        (activity as? MainActivity)?.exitPip()
+        PlayerManager.stopPlayback()
+        MusicService.stop(context)
+        playingVideo = null
+        showVideos = true; showFolders = false; showEq = false
+        showPlaylists = false
+        selectedFolder = null; selectedPlaylist = null
+        selectedVideoFolder = null
+    }
+
+    // Video a pantalla completa (v1.3): SOLO en horizontal. En vertical
+    // el video se ve arriba en tamaño normal, estilo YouTube (v1.4),
+    // con la lista debajo; solo al girar a horizontal (o pulsar
+    // pantalla completa) se expande a toda la pantalla.
+    if (playingVideo != null && isLandscape) {
         VideoPlayerScreen(
             isLandscape = isLandscape,
             isInPip = isInPip,
-            onClose = {
-                // Si se cierra el video estando en la ventanita PiP, la
-                // app sale de la ventanita y vuelve a pantalla completa.
-                (activity as? MainActivity)?.exitPip()
-                // Se quita la imagen (la superficie se suelta en el
-                // DisposableEffect) pero el audio sigue; se vuelve a la
-                // lista de música y el video se retoma con "Ver video".
-                playingVideo = null
-                showVideos = false; showFolders = false; showEq = false
-                showPlaylists = false
-                selectedFolder = null; selectedPlaylist = null
-            },
+            onClose = { closeVideoScreen() },
+            onStop = { stopVideoScreen() },
             onRotate = { if (isLandscape) rotateToPortrait() else rotateToLandscape() }
         )
         return
@@ -1356,10 +1475,18 @@ fun ShenlongPlayMusicApp() {
             style = vizStyle,
             positionMs = positionMs,
             durationMs = durationMs,
+            shuffle = shuffle,
+            repeatMode = repeatMode,
             onToggle = { PlayerManager.togglePlayPause(context) },
             onNext = { PlayerManager.next(context) },
             onPrevious = { PlayerManager.previous(context) },
             onSeek = { PlayerManager.seekTo(it) },
+            onStop = {
+                PlayerManager.stopPlayback()
+                MusicService.stop(context)
+            },
+            onToggleShuffle = { PlayerManager.toggleShuffle() },
+            onCycleRepeat = { PlayerManager.cycleRepeat() },
             onRotate = { rotateToPortrait() }
         )
         return
@@ -1370,6 +1497,16 @@ fun ShenlongPlayMusicApp() {
             .fillMaxSize()
             .background(appBg)
     ) {
+        // Video en vertical (v1.4): estilo YouTube, arriba en tamaño
+        // normal (16:9) con la lista debajo. Solo en horizontal (o con
+        // el botón de pantalla completa) se expande a toda la pantalla.
+        if (playingVideo != null && !isLandscape) {
+            VideoInlinePlayer(
+                onClose = { closeVideoScreen() },
+                onStop = { stopVideoScreen() },
+                onFullscreen = { rotateToLandscape() }
+            )
+        }
         // La lista ocupa toda la altura restante (weight 1f): el encabezado
         // y los controles van DENTRO de la LazyColumn, así que al bajar se
         // esconden y la lista de canciones ocupa toda la pantalla. Al subir
@@ -1452,6 +1589,7 @@ fun ShenlongPlayMusicApp() {
                                         showVideos = true; showFolders = false; showEq = false
                                         showPlaylists = false
                                         selectedFolder = null; selectedPlaylist = null
+                                        selectedVideoFolder = null
                                         showSettingsMenu = false
                                         if (hasVideoPermission) refreshVideos()
                                     }
@@ -1549,9 +1687,10 @@ fun ShenlongPlayMusicApp() {
                         // Cambio rápido música / video (v1.3): un solo
                         // toque cambia entre la lista de música y la de
                         // videos, sin entrar al menú de ajustes. Al
-                        // cambiar se pausa lo que esté sonando (la música
-                        // si se va a video y el video si se vuelve a
-                        // música); para ver un video se pulsa en la lista.
+                        // cambiar se DETIENE por completo lo que esté
+                        // sonando (v1.4): no es pausa, se para todo y se
+                        // quita la notificación. Para ver un video se
+                        // pulsa en la lista.
                         Spacer(modifier = Modifier.width(6.dp))
                         TransportIconButton(
                             icon = if (showVideos) Icons.Default.MusicNote else Icons.Default.Videocam,
@@ -1559,19 +1698,29 @@ fun ShenlongPlayMusicApp() {
                             color = NeonPink,
                             selected = showVideos,
                             onClick = {
-                                PlayerManager.pause()
+                                PlayerManager.stopPlayback()
+                                MusicService.stop(context)
+                                playingVideo = null
+                                pipVideoScreenOpen = false
                                 showSearch = false; query = ""
                                 if (showVideos) {
                                     showVideos = false
                                     selectedFolder = null; selectedPlaylist = null
+                                    selectedVideoFolder = null
                                 } else {
                                     showVideos = true; showFolders = false; showEq = false
                                     showPlaylists = false
                                     selectedFolder = null; selectedPlaylist = null
+                                    selectedVideoFolder = null
                                     if (hasVideoPermission) refreshVideos()
                                 }
                             }
                         )
+                        // Transmitir a TV (v1.4): botón Cast de Google.
+                        // Busca Chromecast, TV con Google TV o TV box en
+                        // la misma WiFi y manda lo que suena a la TV.
+                        Spacer(modifier = Modifier.width(6.dp))
+                        CastButton()
                     }
                     if (showSearch) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -1641,7 +1790,11 @@ fun ShenlongPlayMusicApp() {
                         onPrevious = { PlayerManager.previous(context) },
                         onSeek = { PlayerManager.seekTo(it) },
                         onToggleShuffle = { PlayerManager.toggleShuffle() },
-                        onCycleRepeat = { PlayerManager.cycleRepeat() }
+                        onCycleRepeat = { PlayerManager.cycleRepeat() },
+                        onStop = {
+                            PlayerManager.stopPlayback()
+                            MusicService.stop(context)
+                        }
                     )
                 }
             }
@@ -1685,6 +1838,15 @@ fun ShenlongPlayMusicApp() {
                             description = if (isPlaying) "Pausa" else "Reproducir",
                             color = NeonPurple,
                             onClick = { PlayerManager.togglePlayPause(context) }
+                        )
+                        ActionIconButton(
+                            icon = Icons.Default.Stop,
+                            description = "Detener por completo",
+                            color = NeonRed,
+                            onClick = {
+                                PlayerManager.stopPlayback()
+                                MusicService.stop(context)
+                            }
                         )
                     }
                 }
@@ -2119,7 +2281,11 @@ fun ShenlongPlayMusicApp() {
                     }
                 }
             }
-            // ---- Lista de videos (v1.3) ----
+            // ---- Videos por carpetas (v1.4): igual que la música ----
+            // En vez de una sola lista general, se muestran las carpetas
+            // con su número de videos; al pulsar una carpeta salen sus
+            // videos. Las carpetas se ocultan/muestran con las mismas
+            // carpetas ocultas de la música.
             if (showVideos && !showEq) {
                 if (!hasVideoPermission) {
                     item {
@@ -2147,15 +2313,139 @@ fun ShenlongPlayMusicApp() {
                             modifier = Modifier.padding(16.dp)
                         )
                     }
+                } else if (selectedVideoFolder == null) {
+                    items(videoFolders) { (folder, count) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 3.dp)
+                                .background(cardBg, RoundedCornerShape(12.dp))
+                                .clickable { selectedVideoFolder = folder }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(NeonPink, RoundedCornerShape(8.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = File(folder).name.ifBlank { folder },
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(text = "$count videos", fontSize = 12.sp, color = Color.DarkGray)
+                            }
+                            ActionIconButton(
+                                icon = Icons.Default.VisibilityOff,
+                                description = "Ocultar carpeta",
+                                color = NeonRed,
+                                onClick = { saveHiddenFolders(hiddenFolders + folder) }
+                            )
+                        }
+                    }
+                    // Carpetas ocultas de videos (las mismas de música).
+                    if (hiddenFolders.isNotEmpty()) {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showHiddenFolders = !showHiddenFolders }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    if (showHiddenFolders) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = null,
+                                    tint = NeonPurple,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = "Carpetas ocultas (${hiddenFolders.size})",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = if (showHiddenFolders) "Ocultar" else "Ver",
+                                    fontSize = 12.sp,
+                                    color = NeonPurple
+                                )
+                            }
+                        }
+                        if (showHiddenFolders) {
+                            items(hiddenFolders.sorted()) { folder ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 3.dp)
+                                        .background(cardBg, RoundedCornerShape(12.dp))
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .background(NeonPurple.copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Folder,
+                                            contentDescription = null,
+                                            tint = NeonPurple,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = File(folder).name.ifBlank { folder },
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(text = "Oculta", fontSize = 12.sp, color = Color.DarkGray)
+                                    }
+                                    ActionIconButton(
+                                        icon = Icons.Default.Visibility,
+                                        description = "Mostrar carpeta",
+                                        color = NeonGreen,
+                                        onClick = { saveHiddenFolders(hiddenFolders - folder) }
+                                    )
+                                }
+                            }
+                        }
+                    }
                 } else {
-                    items(videos) { video ->
+                    item {
+                        CompactButton(
+                            text = "← Volver a carpetas de videos",
+                            color = NeonBlue,
+                            selected = false,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            onClick = { selectedVideoFolder = null }
+                        )
+                    }
+                    items(selectedVideoVideos) { video ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp, vertical = 3.dp)
                                 .background(cardBg, RoundedCornerShape(12.dp))
                                 .clickable {
-                                    PlayerManager.playVideo(context, video, videos)
+                                    PlayerManager.playVideo(context, video, selectedVideoVideos)
                                     playingVideo = video
                                 }
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -2721,10 +3011,15 @@ fun FullscreenVisualizer(
     style: String,
     positionMs: Long,
     durationMs: Long,
+    shuffle: Boolean,
+    repeatMode: Int,
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onSeek: (Long) -> Unit,
+    onStop: () -> Unit,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
     onRotate: () -> Unit
 ) {
     var showControls by remember { mutableStateOf(true) }
@@ -2797,11 +3092,23 @@ fun FullscreenVisualizer(
                     Text(text = formatTime(durationMs), fontSize = 12.sp, color = Color.White)
                 }
                 Spacer(modifier = Modifier.height(6.dp))
+                // Controles a pantalla completa (v1.4): los 6 iconos —
+                // aleatorio, anterior, play/pausa, stop, siguiente y
+                // repetir — todos de 48 dp, con el estado activo visible
+                // (aleatorio naranja y repetir rojo al activarse).
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    TransportIconButton(
+                        icon = Icons.Default.Shuffle,
+                        description = if (shuffle) "Aleatorio activado" else "Aleatorio",
+                        color = NeonOrange,
+                        selected = shuffle,
+                        onClick = onToggleShuffle
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
                     TransportIconButton(
                         icon = Icons.Default.SkipPrevious,
                         description = "Anterior",
@@ -2809,7 +3116,7 @@ fun FullscreenVisualizer(
                         selected = true,
                         onClick = onPrevious
                     )
-                    Spacer(modifier = Modifier.width(24.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
                     TransportIconButton(
                         icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         description = if (isPlaying) "Pausa" else "Reproducir",
@@ -2817,13 +3124,29 @@ fun FullscreenVisualizer(
                         selected = true,
                         onClick = onToggle
                     )
-                    Spacer(modifier = Modifier.width(24.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    TransportIconButton(
+                        icon = Icons.Default.Stop,
+                        description = "Detener por completo",
+                        color = NeonRed,
+                        selected = true,
+                        onClick = onStop
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
                     TransportIconButton(
                         icon = Icons.Default.SkipNext,
                         description = "Siguiente",
                         color = NeonBlue,
                         selected = true,
                         onClick = onNext
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    TransportIconButton(
+                        icon = if (repeatMode == 2) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                        description = PlayerManager.repeatLabel(),
+                        color = NeonRed,
+                        selected = repeatMode != 0,
+                        onClick = onCycleRepeat
                     )
                 }
             }
@@ -2876,6 +3199,197 @@ fun VideoThumbnail(video: VideoItem) {
 }
 
 // ---------------------------------------------------------------------------
+// Botón Cast (v1.4): botón de Google Cast (MediaRouteButton) que busca
+// Chromecast, TV con Google TV o TV box en la misma WiFi. Al elegir un
+// dispositivo, CastManager manda lo que suena a la TV. Si el teléfono
+// no tiene Google Play Services, el botón no muestra dispositivos y la
+// app sigue funcionando igual.
+// ---------------------------------------------------------------------------
+
+@Composable
+fun CastButton() {
+    val context = LocalContext.current
+    AndroidView(
+        factory = { ctx ->
+            MediaRouteButton(ctx).apply {
+                try {
+                    routeSelector =
+                        CastContext.getSharedInstance(ctx.applicationContext).mergedSelector
+                } catch (e: Exception) {
+                    // Sin Google Play Services no hay dispositivos Cast.
+                }
+            }
+        },
+        modifier = Modifier.size(48.dp)
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Video en vertical estilo YouTube (v1.4): el video arriba en tamaño
+// normal (16:9) con sus controles debajo, y la lista de videos debajo
+// en la pantalla principal. Solo al girar a horizontal (o pulsar
+// pantalla completa) se expande a toda la pantalla.
+// ---------------------------------------------------------------------------
+
+@Composable
+fun VideoInlinePlayer(
+    onClose: () -> Unit,
+    onStop: () -> Unit,
+    onFullscreen: () -> Unit
+) {
+    val context = LocalContext.current
+    val video by PlayerManager.currentVideo.collectAsState()
+    val isPlaying by PlayerManager.isPlaying.collectAsState()
+    val positionMs by PlayerManager.positionMs.collectAsState()
+    val durationMs by PlayerManager.durationMs.collectAsState()
+    val isInPip by MainActivity.isInPipFlow.collectAsState()
+    val isCasting by CastManager.isCasting.collectAsState()
+    val castDevice by CastManager.castDeviceName.collectAsState()
+    BackHandler { onClose() }
+    // Al volver de la ventanita PiP (v1.4): se vuelve a enganchar la
+    // imagen, que si no solo sonaría el audio.
+    LaunchedEffect(isInPip) {
+        if (!isInPip) PlayerManager.reattachVideoSurface()
+    }
+    DisposableEffect(Unit) {
+        onDispose { PlayerManager.setVideoSurface(null) }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.Black)
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                SurfaceView(ctx).apply {
+                    holder.addCallback(object : SurfaceHolder.Callback {
+                        override fun surfaceCreated(holder: SurfaceHolder) {
+                            PlayerManager.setVideoSurface(this@apply)
+                        }
+
+                        override fun surfaceChanged(
+                            holder: SurfaceHolder,
+                            format: Int,
+                            width: Int,
+                            height: Int
+                        ) {
+                        }
+
+                        override fun surfaceDestroyed(holder: SurfaceHolder) {}
+                    })
+                }
+            },
+            update = { view -> PlayerManager.setVideoSurface(view) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = video?.title ?: "Video",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = if (isCasting) "Transmitiendo a ${castDevice ?: "TV"}"
+                        else "Video • ${formatTime(durationMs)}",
+                        fontSize = 12.sp,
+                        color = Color.LightGray
+                    )
+                }
+                CastButton()
+                Spacer(modifier = Modifier.width(6.dp))
+                TransportIconButton(
+                    icon = Icons.Default.Fullscreen,
+                    description = "Pantalla completa",
+                    color = Color.White,
+                    selected = true,
+                    onClick = onFullscreen
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                TransportIconButton(
+                    icon = Icons.Default.Close,
+                    description = "Cerrar video",
+                    color = Color.White,
+                    selected = true,
+                    onClick = onClose
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Slider(
+                value = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,
+                onValueChange = { fraction ->
+                    if (durationMs > 0) PlayerManager.seekTo((fraction * durationMs).toLong())
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = formatTime(positionMs), fontSize = 12.sp, color = Color.White)
+                Text(text = formatTime(durationMs), fontSize = 12.sp, color = Color.White)
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TransportIconButton(
+                    icon = Icons.Default.SkipPrevious,
+                    description = "Video anterior",
+                    color = NeonBlue,
+                    selected = true,
+                    onClick = { PlayerManager.previous(context) }
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                TransportIconButton(
+                    icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    description = if (isPlaying) "Pausa" else "Reproducir",
+                    color = NeonPurple,
+                    selected = true,
+                    onClick = { PlayerManager.togglePlayPause(context) }
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                TransportIconButton(
+                    icon = Icons.Default.Stop,
+                    description = "Detener por completo",
+                    color = NeonRed,
+                    selected = true,
+                    onClick = onStop
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                TransportIconButton(
+                    icon = Icons.Default.SkipNext,
+                    description = "Video siguiente",
+                    color = NeonBlue,
+                    selected = true,
+                    onClick = { PlayerManager.next(context) }
+                )
+            }
+            Text(
+                text = "Gira el teléfono o pulsa pantalla completa para " +
+                    "verlo a lo grande. Al cerrar, el audio sigue en " +
+                    "segundo plano; el botón de stop lo detiene todo.",
+                fontSize = 11.sp,
+                color = Color.LightGray
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Pantalla de video a pantalla completa (v1.3): el video se dibuja en un
 // SurfaceView sobre el MISMO ExoPlayer de la música, así que al salir de
 // esta pantalla (o apagar la pantalla, o minimizar la app) el audio sigue
@@ -2891,6 +3405,7 @@ fun VideoPlayerScreen(
     isLandscape: Boolean,
     isInPip: Boolean = false,
     onClose: () -> Unit,
+    onStop: () -> Unit,
     onRotate: () -> Unit
 ) {
     val context = LocalContext.current
@@ -2898,6 +3413,8 @@ fun VideoPlayerScreen(
     val isPlaying by PlayerManager.isPlaying.collectAsState()
     val positionMs by PlayerManager.positionMs.collectAsState()
     val durationMs by PlayerManager.durationMs.collectAsState()
+    val isCasting by CastManager.isCasting.collectAsState()
+    val castDevice by CastManager.castDeviceName.collectAsState()
     var showControls by remember { mutableStateOf(true) }
     // El botón de atrás del teléfono también cierra la pantalla (el
     // audio sigue en segundo plano, como al pulsar la X). En la
@@ -2914,6 +3431,11 @@ fun VideoPlayerScreen(
     DisposableEffect(Unit) {
         onDispose { PlayerManager.setVideoSurface(null) }
     }
+    // Al volver de la ventanita PiP (v1.4): se vuelve a enganchar la
+    // imagen, que si no solo sonaría el audio.
+    LaunchedEffect(isInPip) {
+        if (!isInPip) PlayerManager.reattachVideoSurface()
+    }
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -2921,7 +3443,28 @@ fun VideoPlayerScreen(
             .clickable { showControls = !showControls }
     ) {
         AndroidView(
-            factory = { ctx -> SurfaceView(ctx) },
+            factory = { ctx ->
+                SurfaceView(ctx).apply {
+                    // Si Android suelta y vuelve a crear la superficie
+                    // (por ejemplo al volver de PiP), se vuelve a
+                    // enganchar sola (v1.4).
+                    holder.addCallback(object : SurfaceHolder.Callback {
+                        override fun surfaceCreated(holder: SurfaceHolder) {
+                            PlayerManager.setVideoSurface(this@apply)
+                        }
+
+                        override fun surfaceChanged(
+                            holder: SurfaceHolder,
+                            format: Int,
+                            width: Int,
+                            height: Int
+                        ) {
+                        }
+
+                        override fun surfaceDestroyed(holder: SurfaceHolder) {}
+                    })
+                }
+            },
             update = { view -> PlayerManager.setVideoSurface(view) },
             modifier = Modifier.fillMaxSize()
         )
@@ -2947,11 +3490,15 @@ fun VideoPlayerScreen(
                             color = Color.White
                         )
                         Text(
-                            text = "Video • ${formatTime(durationMs)}",
+                            text = if (isCasting) "Transmitiendo a ${castDevice ?: "TV"}"
+                            else "Video • ${formatTime(durationMs)}",
                             fontSize = 12.sp,
                             color = Color.LightGray
                         )
                     }
+                    // Transmitir a TV (v1.4).
+                    CastButton()
+                    Spacer(modifier = Modifier.width(6.dp))
                     TransportIconButton(
                         icon = Icons.Default.ScreenRotation,
                         description = "Girar pantalla",
@@ -3006,6 +3553,14 @@ fun VideoPlayerScreen(
                     )
                     Spacer(modifier = Modifier.width(24.dp))
                     TransportIconButton(
+                        icon = Icons.Default.Stop,
+                        description = "Detener por completo",
+                        color = NeonRed,
+                        selected = true,
+                        onClick = onStop
+                    )
+                    Spacer(modifier = Modifier.width(24.dp))
+                    TransportIconButton(
                         icon = Icons.Default.SkipNext,
                         description = "Video siguiente",
                         color = NeonBlue,
@@ -3019,7 +3574,8 @@ fun VideoPlayerScreen(
                         "en una ventanita flotante. Si sales de esta " +
                         "pantalla o apagas la pantalla, el audio sigue " +
                         "sonando. Vuelve a la app y toca \"Ver video\" " +
-                        "para retomar la imagen.",
+                        "para retomar la imagen. El botón de stop detiene " +
+                        "el video por completo.",
                     fontSize = 12.sp,
                     color = Color.LightGray
                 )
@@ -3043,8 +3599,11 @@ fun NowPlayingCard(
     onPrevious: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit
+    onCycleRepeat: () -> Unit,
+    onStop: () -> Unit
 ) {
+    val isCasting by CastManager.isCasting.collectAsState()
+    val castDevice by CastManager.castDeviceName.collectAsState()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -3055,6 +3614,15 @@ fun NowPlayingCard(
         Text(text = "Sonando ahora", fontSize = 12.sp, color = NeonPink, fontWeight = FontWeight.Bold)
         Text(text = song.title, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Text(text = "${song.artist} • ${song.album}", fontSize = 12.sp, color = Color.DarkGray)
+        // Transmitiendo a la TV (v1.4): se ve en la tarjeta.
+        if (isCasting) {
+            Text(
+                text = "Transmitiendo a ${castDevice ?: "TV"}",
+                fontSize = 12.sp,
+                color = NeonPurple,
+                fontWeight = FontWeight.Bold
+            )
+        }
         Spacer(modifier = Modifier.height(8.dp))
         // Visualizador estilo Windows Media Player: barras neón al ritmo
         // de la música, encima de la barra de progreso y los controles.
@@ -3072,10 +3640,11 @@ fun NowPlayingCard(
             Text(text = formatTime(durationMs), fontSize = 12.sp)
         }
         Spacer(modifier = Modifier.height(6.dp))
-        // Controles de reproducción (v1.3): una sola fila de 5 iconos
-        // compactos — aleatorio, anterior, play/pausa, siguiente, repetir
-        // — todos de 48 dp con icono de 24 dp, sin letras y sin ocupar
-        // más espacio arriba. El giro quedó solo en el encabezado.
+        // Controles de reproducción (v1.3, v1.4): una sola fila de 6
+        // iconos compactos — aleatorio, anterior, play/pausa, siguiente,
+        // repetir y STOP — todos de 48 dp con icono de 24 dp, sin letras
+        // y sin ocupar más espacio arriba. El giro quedó solo en el
+        // encabezado. Stop detiene por completo (no es pausa).
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
@@ -3088,7 +3657,7 @@ fun NowPlayingCard(
                 selected = shuffle,
                 onClick = onToggleShuffle
             )
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             TransportIconButton(
                 icon = Icons.Default.SkipPrevious,
                 description = "Anterior",
@@ -3096,7 +3665,7 @@ fun NowPlayingCard(
                 selected = false,
                 onClick = onPrevious
             )
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             TransportIconButton(
                 icon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 description = if (isPlaying) "Pausa" else "Reproducir",
@@ -3104,7 +3673,7 @@ fun NowPlayingCard(
                 selected = true,
                 onClick = onToggle
             )
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             TransportIconButton(
                 icon = Icons.Default.SkipNext,
                 description = "Siguiente",
@@ -3112,13 +3681,21 @@ fun NowPlayingCard(
                 selected = false,
                 onClick = onNext
             )
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             TransportIconButton(
                 icon = if (repeatMode == 2) Icons.Default.RepeatOne else Icons.Default.Repeat,
                 description = PlayerManager.repeatLabel(),
                 color = NeonRed,
                 selected = repeatMode != 0,
                 onClick = onCycleRepeat
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            TransportIconButton(
+                icon = Icons.Default.Stop,
+                description = "Detener por completo",
+                color = NeonRed,
+                selected = false,
+                onClick = onStop
             )
         }
     }

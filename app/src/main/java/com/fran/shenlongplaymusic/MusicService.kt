@@ -29,6 +29,11 @@ class MusicService : Service() {
         private const val CHANNEL_ID = "shenlong_play_music"
         private const val NOTIFICATION_ID = 1
 
+        // ¿Está el servicio en marcha? Para detenerlo sin arrancarlo
+        // de nuevo: stop() no hace nada si ya está parado.
+        var isRunning = false
+            private set
+
         fun start(context: Context) {
             val intent = Intent(context, MusicService::class.java)
             if (Build.VERSION.SDK_INT >= 26) {
@@ -47,12 +52,20 @@ class MusicService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
         }
+
+        /** Detiene por completo la reproducción y quita la notificación. */
+        fun stop(context: Context) {
+            if (!isRunning) return
+            val intent = Intent(context, MusicService::class.java).setAction(ACTION_STOP)
+            context.startService(intent)
+        }
     }
 
     private var mediaSession: MediaSession? = null
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         PlayerManager.init(this)
         val player = PlayerManager.playerOrNull()
         if (player != null) {
@@ -89,7 +102,9 @@ class MusicService : Service() {
             ACTION_NEXT -> PlayerManager.next(this)
             ACTION_PREVIOUS -> PlayerManager.previous(this)
             ACTION_STOP -> {
-                PlayerManager.playerOrNull()?.pause()
+                // Stop de verdad (v1.4): se para todo, se libera la cola
+                // y se quita la notificación. No es pausa.
+                PlayerManager.stopPlayback()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
@@ -100,6 +115,7 @@ class MusicService : Service() {
     }
 
     override fun onDestroy() {
+        isRunning = false
         mediaSession?.release()
         mediaSession = null
         super.onDestroy()
@@ -187,6 +203,13 @@ class MusicService : Service() {
                 android.R.drawable.ic_media_next,
                 "Siguiente",
                 actionIntent(this, ACTION_NEXT)
+            )
+            // Detener (v1.4): sale en la notificación expandida; quita
+            // la reproducción por completo (no es pausa).
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Detener",
+                actionIntent(this, ACTION_STOP)
             )
             .build()
     }

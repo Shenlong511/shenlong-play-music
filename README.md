@@ -1,6 +1,9 @@
 # Shenlong Play Music
 
-Reproductor de música local para Android, sin internet.
+Reproductor de música y video local para Android. La música y los
+videos están en el teléfono y se reproducen sin internet; la única
+función que usa red es la transmisión Cast a la TV (por la WiFi de
+casa, sin subir nada a internet).
 
 ## Qué hace
 
@@ -24,21 +27,42 @@ Reproductor de música local para Android, sin internet.
   elegibles en Ajustes > Visualización y guardados en el teléfono
   (DataStore). Al girar el teléfono a horizontal, la visualización ocupa
   toda la pantalla; al pulsar cualquier lugar aparecen/desaparecen los
-  controles (anterior, play/pausa, siguiente) y se esconden solos a los
-  3 segundos. En vertical hay un botón de giro (junto a la lupa y en la
+  controles (aleatorio, anterior, play/pausa, stop, siguiente y
+  repetir) y se esconden solos a los 3 segundos. En vertical hay un botón de giro (junto a la lupa y en la
   tarjeta "Sonando ahora") para pasar a horizontal, y en horizontal el
   mismo giro vuelve a vertical.
 - Todos los botones de reproducción son iconos de tamaño fijo (48 dp,
-  icono de 24 dp dentro), sin letras, en una sola fila de 5 iconos:
-  aleatorio, anterior, play/pausa, siguiente y repetir.
-- Videos: sección "Videos" en el menú de ajustes con la lista de videos
-  del teléfono (MP4, MKV, WebM, 3GP y demás formatos comunes, con
-  miniatura) y reproducción a pantalla completa con ExoPlayer. El video
-  usa el mismo reproductor y servicio que la música: al cerrar la
-  pantalla, minimizar la app o apagar la pantalla, el audio sigue
-  sonando en segundo plano, con los controles en la notificación y en el
-  bloqueo. Al volver a la app, la tarjeta "Video en segundo plano" lo
-  retoma con "Ver video".
+  icono de 24 dp dentro), sin letras, en una sola fila de 6 iconos:
+  aleatorio, anterior, play/pausa, siguiente, repetir y **STOP**. El
+  botón de stop detiene por completo la reproducción (no es pausa): se
+  para todo, se libera la cola y se quita la notificación. También hay
+  stop en el video (vertical y horizontal), en la pantalla completa de
+  la visualización y en la notificación expandida.
+- Videos: sección "Videos" en el menú de ajustes, **agrupados por
+  carpetas como la música** (se pueden ocultar carpetas y volver a
+  mostrarlas una por una en "Carpetas ocultas", las mismas de la
+  música), con miniatura. Al abrir un video en vertical se ve arriba
+  en tamaño normal estilo YouTube, con la lista debajo; solo al girar
+  a horizontal (o pulsar pantalla completa) se expande a toda la
+  pantalla. Formatos comunes: MP4, MKV, WebM, 3GP. El video usa el
+  mismo reproductor y servicio que la música: al cerrar la pantalla,
+  minimizar la app o apagar la pantalla, el audio sigue sonando en
+  segundo plano, con los controles en la notificación y en el bloqueo.
+  Al volver a la app, la tarjeta "Video en segundo plano" lo retoma
+  con "Ver video" y se vuelve a ver la imagen (al volver de la
+  ventanita flotante también se reengancha el video). Al cambiar de
+  música a video (o al revés) con el botón rápido, la reproducción
+  anterior se DETIENE por completo (no solo se pausa).
+- Transmisión a TV (Cast, v1.4): botón Cast en el encabezado y en las
+  pantallas de video. Busca Chromecast, TV con Google TV o TV box en
+  la misma WiFi y manda lo que suena (canción o video) a la TV; el
+  teléfono se queda en pausa. Como la TV no puede leer los archivos
+  del teléfono, la app levanta un servidor HTTP mínimo solo en la red
+  WiFi de casa y le pasa a la TV la dirección local del archivo; nada
+  se sube a internet y el servidor se apaga al terminar la transmisión.
+  El teléfono y la TV tienen que estar en la misma WiFi. Si el
+  teléfono no tiene Google Play Services, el botón Cast no muestra
+  dispositivos y todo lo demás sigue funcionando igual.
 - Aleatorio, repetir lista, repetir una canción, siguiente/anterior,
   play/pausa y barra de progreso.
 - Ecualizador de 5 bandas con presets: Normal, Rock, Pop, Jazz, Clásica,
@@ -74,9 +98,13 @@ Reproductor de música local para Android, sin internet.
 ## Notas
 
 - Paquete: `com.fran.shenlongplaymusic`. minSdk 24, targetSdk 34.
-- Sin permiso de internet: la música está en el teléfono.
+- La música y los videos se reproducen sin internet (archivos locales
+  del teléfono). Permisos nuevos de la 1.4 solo para Cast: INTERNET,
+  ACCESS_NETWORK_STATE y ACCESS_WIFI_STATE (permisos normales, no se
+  piden al usuario; solo sirven para descubrir la TV en la WiFi de casa
+  y mandarle el archivo por la red local, sin subir nada a internet).
 - Stack: Kotlin 1.9.24, AGP 8.4.2, Gradle 8.6, Compose 1.5.14,
-  Media3 (ExoPlayer) 1.3.1.
+  Media3 (ExoPlayer) 1.3.1, Google Cast 21.4.0.
 - Como cada APK de prueba tiene una firma distinta, para instalar una
   versión nueva hay que desinstalar primero la anterior.
 
@@ -92,3 +120,27 @@ Reproductor de música local para Android, sin internet.
   la lupa y el engranaje) que con un solo toque cambia entre la lista de
   música y la de videos, sin entrar a Ajustes. Al cambiar se pausa lo que
   esté sonando.
+
+## Novedades de la 1.4 (stop, videos por carpetas, video en vertical, Cast)
+- Botón de STOP (icono de cuadrado): detiene por completo la música y el
+  video, en vertical y en horizontal (tarjeta "Sonando ahora", video en
+  vertical, video a pantalla completa, visualización a pantalla completa,
+  tarjeta "Video en segundo plano" y notificación expandida). No es
+  pausa: se para todo, se libera la cola y se quita la notificación.
+- Videos por carpetas: en vez de una sola lista general, los videos se
+  agrupan por carpeta como la música, con las mismas carpetas ocultas
+  (ocultar una carpeta la quita de música y de videos).
+- Video en vertical estilo YouTube: al abrir un video en vertical se ve
+  arriba en tamaño normal (16:9) con la lista debajo; solo en horizontal
+  (o con el botón de pantalla completa) se expande a toda la pantalla.
+- Al volver de la ventanita flotante (PiP) a la app, el video se vuelve
+  a ver: se reengancha la superficie al salir de PiP y cuando se crea
+  una superficie nueva. Al cambiar de música a video (o al revés) con el
+  botón rápido, la reproducción anterior se detiene por completo (stop,
+  no pausa).
+- En la visualización a pantalla completa en horizontal ya están también
+  los botones de aleatorio y repetir, junto a anterior, play/pausa,
+  stop y siguiente (6 iconos de 48 dp, con el estado activo visible).
+- Transmisión a TV (Google Cast / Chromecast): botón Cast en el
+  encabezado y en las pantallas de video. Permisos nuevos: INTERNET,
+  ACCESS_NETWORK_STATE y ACCESS_WIFI_STATE (solo para la red local).
