@@ -3214,7 +3214,7 @@ fun CastButton() {
             MediaRouteButton(ctx).apply {
                 try {
                     routeSelector =
-                        CastContext.getSharedInstance(ctx.applicationContext).mergedSelector
+                        CastContext.getSharedInstance(ctx.applicationContext)?.mergedSelector ?: MediaRouteSelector.Builder().build()
                 } catch (e: Exception) {
                     // Sin Google Play Services no hay dispositivos Cast.
                 }
