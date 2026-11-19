@@ -73,6 +73,10 @@ object CastManager {
                     }
 
                     override fun onSessionResuming(session: CastSession, sessionId: String) {}
+                    override fun onSessionResumed(session: CastSession, wasSuspended: Boolean) {
+                        _isCasting.value = true
+                        _castDeviceName.value = session.castDevice?.friendlyName
+                    }
                     override fun onSessionResumeFailed(session: CastSession, error: Int) {}
                     override fun onSessionSuspended(session: CastSession, reason: Int) {
                         _isCasting.value = false

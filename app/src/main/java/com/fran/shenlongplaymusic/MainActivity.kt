@@ -117,7 +117,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.mediarouter.app.MediaRouteButton
-import com.google.android.gms.cast.framework.CastContext
+import androidx.mediarouter.media.MediaRouteSelector
+import com.google.android.gms.cast.CastMediaControlIntent
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -3213,8 +3214,16 @@ fun CastButton() {
         factory = { ctx ->
             MediaRouteButton(ctx).apply {
                 try {
-                    routeSelector =
-                        CastContext.getSharedInstance(ctx.applicationContext)?.mergedSelector ?: MediaRouteSelector.Builder().build()
+                    // Selector explícito para el receptor Cast por defecto:
+                    // no se usa CastContext.mergedSelector porque el
+                    // compilador no resolvía su tipo MediaRouteSelector.
+                    routeSelector = MediaRouteSelector.Builder()
+                        .addControlCategory(
+                            CastMediaControlIntent.categoryForCast(
+                                CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID
+                            )
+                        )
+                        .build()
                 } catch (e: Exception) {
                     // Sin Google Play Services no hay dispositivos Cast.
                 }
