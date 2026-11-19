@@ -124,6 +124,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1293,7 +1294,7 @@ class MainActivity : ComponentActivity() {
      * PiP) vuelven a aparecer. Con BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE,
      * deslizar desde el borde las muestra un momento sin salir.
      */
-    fun setImmersive(fullscreen: Boolean) {
+    fun setImmersiveMode(fullscreen: Boolean) {
         try {
             WindowCompat.setDecorFitsSystemWindows(window, !fullscreen)
             val controller = WindowCompat.getInsetsController(window, window.decorView)
@@ -1657,7 +1658,7 @@ fun ShenlongPlayMusicApp() {
     // o visualizador de música), así que basta con la orientación.
     val immersiveFullscreen = isLandscape && !isInPip
     LaunchedEffect(immersiveFullscreen) {
-        (activity as? MainActivity)?.setImmersive(immersiveFullscreen)
+        (activity as? MainActivity)?.setImmersiveMode(immersiveFullscreen)
     }
 
     // Video a pantalla completa (v1.3): SOLO en horizontal. En vertical
