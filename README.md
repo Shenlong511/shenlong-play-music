@@ -1,9 +1,9 @@
 # Shenlong Play Music
 
 Reproductor de música y video local para Android. La música y los
-videos están en el teléfono y se reproducen sin internet; la única
-función que usa red es la transmisión Cast a la TV (por la WiFi de
-casa, sin subir nada a internet).
+videos están en el teléfono y se reproducen sin internet, sin ningún
+permiso de red. (La transmisión Cast a la TV de la 1.4 se quitó en
+la 1.5 porque hacía que la app se cerrara al abrir.)
 
 ## Qué hace
 
@@ -120,6 +120,21 @@ casa, sin subir nada a internet).
   la lupa y el engranaje) que con un solo toque cambia entre la lista de
   música y la de videos, sin entrar a Ajustes. Al cambiar se pausa lo que
   esté sonando.
+
+## Novedades de la 1.5 (Cast quitado, lo demás de la 1.4 se queda)
+
+- Cast quitado por completo: sin botón Cast, sin CastManager, sin
+  CastOptionsProvider, sin permisos de red (INTERNET,
+  ACCESS_NETWORK_STATE, ACCESS_WIFI_STATE) y sin las librerías
+  mediarouter ni play-services-cast-framework. La 1.4 compilaba en
+  verde pero se cerraba al abrir ("continúa fallando") justo después
+  de la pantalla del logo, y la 1.3 sin Cast abría bien: lo único
+  nuevo de la 1.4 que corría al arrancar era Cast.
+- Se conservan todas las demás novedades de la 1.4: botón de stop,
+  videos por carpetas con ocultar/mostrar, video que se sigue viendo
+  al volver de la ventanita PiP, detener por completo al cambiar de
+  música a video y viceversa, video en vertical estilo YouTube y
+  aleatorio/repetir en el visualizador horizontal.
 
 ## Novedades de la 1.4 (stop, videos por carpetas, video en vertical, Cast)
 - Botón de STOP (icono de cuadrado): detiene por completo la música y el

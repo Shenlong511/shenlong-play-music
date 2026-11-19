@@ -116,9 +116,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.mediarouter.app.MediaRouteButton
-import androidx.mediarouter.media.MediaRouteSelector
-import com.google.android.gms.cast.CastMediaControlIntent
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -1085,8 +1082,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         PlayerManager.init(this)
-        // Transmisión Cast (v1.4): escucha si se conecta una TV.
-        CastManager.init(this)
+        // v1.5: Cast quitado — en la 1.4 hacía que la app se cerrara al
+        // abrir en el teléfono de Fran, así que la transmisión a TV
+        // queda desactivada hasta encontrar una forma segura de ponerla.
         setContent { ShenlongPlayMusicApp() }
     }
 
@@ -1717,11 +1715,6 @@ fun ShenlongPlayMusicApp() {
                                 }
                             }
                         )
-                        // Transmitir a TV (v1.4): botón Cast de Google.
-                        // Busca Chromecast, TV con Google TV o TV box en
-                        // la misma WiFi y manda lo que suena a la TV.
-                        Spacer(modifier = Modifier.width(6.dp))
-                        CastButton()
                     }
                     if (showSearch) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -3200,40 +3193,6 @@ fun VideoThumbnail(video: VideoItem) {
 }
 
 // ---------------------------------------------------------------------------
-// Botón Cast (v1.4): botón de Google Cast (MediaRouteButton) que busca
-// Chromecast, TV con Google TV o TV box en la misma WiFi. Al elegir un
-// dispositivo, CastManager manda lo que suena a la TV. Si el teléfono
-// no tiene Google Play Services, el botón no muestra dispositivos y la
-// app sigue funcionando igual.
-// ---------------------------------------------------------------------------
-
-@Composable
-fun CastButton() {
-    val context = LocalContext.current
-    AndroidView(
-        factory = { ctx ->
-            MediaRouteButton(ctx).apply {
-                try {
-                    // Selector explícito para el receptor Cast por defecto:
-                    // no se usa CastContext.mergedSelector porque el
-                    // compilador no resolvía su tipo MediaRouteSelector.
-                    routeSelector = MediaRouteSelector.Builder()
-                        .addControlCategory(
-                            CastMediaControlIntent.categoryForCast(
-                                CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID
-                            )
-                        )
-                        .build()
-                } catch (e: Exception) {
-                    // Sin Google Play Services no hay dispositivos Cast.
-                }
-            }
-        },
-        modifier = Modifier.size(48.dp)
-    )
-}
-
-// ---------------------------------------------------------------------------
 // Video en vertical estilo YouTube (v1.4): el video arriba en tamaño
 // normal (16:9) con sus controles debajo, y la lista de videos debajo
 // en la pantalla principal. Solo al girar a horizontal (o pulsar
@@ -3252,8 +3211,6 @@ fun VideoInlinePlayer(
     val positionMs by PlayerManager.positionMs.collectAsState()
     val durationMs by PlayerManager.durationMs.collectAsState()
     val isInPip by MainActivity.isInPipFlow.collectAsState()
-    val isCasting by CastManager.isCasting.collectAsState()
-    val castDevice by CastManager.castDeviceName.collectAsState()
     BackHandler { onClose() }
     // Al volver de la ventanita PiP (v1.4): se vuelve a enganchar la
     // imagen, que si no solo sonaría el audio.
@@ -3310,14 +3267,11 @@ fun VideoInlinePlayer(
                         color = Color.White
                     )
                     Text(
-                        text = if (isCasting) "Transmitiendo a ${castDevice ?: "TV"}"
-                        else "Video • ${formatTime(durationMs)}",
+                        text = "Video • ${formatTime(durationMs)}",
                         fontSize = 12.sp,
                         color = Color.LightGray
                     )
                 }
-                CastButton()
-                Spacer(modifier = Modifier.width(6.dp))
                 TransportIconButton(
                     icon = Icons.Default.Fullscreen,
                     description = "Pantalla completa",
@@ -3422,8 +3376,6 @@ fun VideoPlayerScreen(
     val isPlaying by PlayerManager.isPlaying.collectAsState()
     val positionMs by PlayerManager.positionMs.collectAsState()
     val durationMs by PlayerManager.durationMs.collectAsState()
-    val isCasting by CastManager.isCasting.collectAsState()
-    val castDevice by CastManager.castDeviceName.collectAsState()
     var showControls by remember { mutableStateOf(true) }
     // El botón de atrás del teléfono también cierra la pantalla (el
     // audio sigue en segundo plano, como al pulsar la X). En la
@@ -3499,15 +3451,11 @@ fun VideoPlayerScreen(
                             color = Color.White
                         )
                         Text(
-                            text = if (isCasting) "Transmitiendo a ${castDevice ?: "TV"}"
-                            else "Video • ${formatTime(durationMs)}",
+                            text = "Video • ${formatTime(durationMs)}",
                             fontSize = 12.sp,
                             color = Color.LightGray
                         )
                     }
-                    // Transmitir a TV (v1.4).
-                    CastButton()
-                    Spacer(modifier = Modifier.width(6.dp))
                     TransportIconButton(
                         icon = Icons.Default.ScreenRotation,
                         description = "Girar pantalla",
@@ -3611,8 +3559,6 @@ fun NowPlayingCard(
     onCycleRepeat: () -> Unit,
     onStop: () -> Unit
 ) {
-    val isCasting by CastManager.isCasting.collectAsState()
-    val castDevice by CastManager.castDeviceName.collectAsState()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -3623,15 +3569,6 @@ fun NowPlayingCard(
         Text(text = "Sonando ahora", fontSize = 12.sp, color = NeonPink, fontWeight = FontWeight.Bold)
         Text(text = song.title, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Text(text = "${song.artist} • ${song.album}", fontSize = 12.sp, color = Color.DarkGray)
-        // Transmitiendo a la TV (v1.4): se ve en la tarjeta.
-        if (isCasting) {
-            Text(
-                text = "Transmitiendo a ${castDevice ?: "TV"}",
-                fontSize = 12.sp,
-                color = NeonPurple,
-                fontWeight = FontWeight.Bold
-            )
-        }
         Spacer(modifier = Modifier.height(8.dp))
         // Visualizador estilo Windows Media Player: barras neón al ritmo
         // de la música, encima de la barra de progreso y los controles.

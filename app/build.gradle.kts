@@ -11,8 +11,8 @@ android {
         applicationId = "com.fran.shenlongplaymusic"
         minSdk = 24
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
     }
 
     buildTypes {
@@ -61,10 +61,7 @@ dependencies {
     // Para NotificationCompat.MediaStyle (controles en bloqueo/notificación)
     // y el token de la MediaSession.
     implementation("androidx.media:media:1.7.0")
-    // Transmisión a TV / Chromecast (v1.4): botón Cast y descubrimiento
-    // de dispositivos en la red local (Google Cast).
-    implementation("androidx.mediarouter:mediarouter:1.7.0")
-    implementation("com.google.android.gms:play-services-cast-framework:21.4.0")
+    // v1.5: Cast quitado (la 1.4 se cerraba al abrir por Cast).
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
