@@ -39,6 +39,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.material.icons.filled.AspectRatio
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -85,12 +92,14 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -335,6 +344,30 @@ class BackgroundColorSettings(private val context: Context) {
 
     val colorNameFlow: Flow<String> =
         context.dataStore.data.map { it[colorKey] ?: "Claro" }
+    val transparencyFlow: Flow<Float> =
+        context.dataStore.data.map { (it[transparencyKey] ?: 0f).coerceIn(0f, 1f) }
+
+    suspend fun save(colorName: String, transparency: Float) {
+        context.dataStore.edit { prefs ->
+            prefs[colorKey] = colorName
+            prefs[transparencyKey] = transparency.coerceIn(0f, 1f)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Color de las letras (DataStore, v1.7): igual que el de tarjetas y el
+// de fondo, color fijo + transparencia, aplicado como color de texto
+// principal de la app. Por defecto "Negro", el color de texto que ya
+// tenía la app, así que si no se toca nada no cambia nada.
+// ---------------------------------------------------------------------------
+
+class TextColorSettings(private val context: Context) {
+    private val colorKey = stringPreferencesKey("text_color_name")
+    private val transparencyKey = floatPreferencesKey("text_transparency")
+
+    val colorNameFlow: Flow<String> =
+        context.dataStore.data.map { it[colorKey] ?: "Negro" }
     val transparencyFlow: Flow<Float> =
         context.dataStore.data.map { (it[transparencyKey] ?: 0f).coerceIn(0f, 1f) }
 
@@ -1168,6 +1201,31 @@ class MainActivity : ComponentActivity() {
         intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
         startActivity(intent)
     }
+
+    /**
+     * Video a pantalla completa de verdad (v1.6): en horizontal se
+     * ocultan la barra de estado (batería, señal, hora) y la barra de
+     * navegación, y el video ocupa toda la pantalla. Al salir de
+     * pantalla completa (o volver a vertical, o entrar en PiP) vuelven
+     * a aparecer. Con BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE, deslizar
+     * desde el borde las muestra un momento sin salir del video.
+     */
+    fun setImmersiveVideo(fullscreen: Boolean) {
+        try {
+            WindowCompat.setDecorFitsSystemWindows(window, !fullscreen)
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            if (fullscreen) {
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+        } catch (e: Exception) {
+            // Si el teléfono no deja ocultar las barras, el video se
+            // sigue viendo igual que antes, solo con las barras visibles.
+        }
+    }
 }
 
 @Composable
@@ -1196,6 +1254,12 @@ fun ShenlongPlayMusicApp() {
     // PiP? Solo en ese caso se vuelve a abrir al salir de PiP (v1.4):
     // si el usuario cerró el video a propósito, no se reabre.
     var pipVideoScreenOpen by remember { mutableStateOf(false) }
+    // Modo de ajuste del video (v1.6): 0 = Ajustar (se ve completo sin
+    // recortar), 1 = Rellenar (llena la pantalla aunque recorte un
+    // poco), 2 = Original (tamaño real del video). Se cambia con el
+    // botón de ajuste en los controles del video.
+    var videoResizeMode by remember { mutableStateOf(0) }
+    fun cycleVideoResizeMode() { videoResizeMode = (videoResizeMode + 1) % 3 }
     // Carpeta de videos elegida (v1.4): null = lista de carpetas.
     var selectedVideoFolder by remember { mutableStateOf<String?>(null) }
     var showSettingsMenu by remember { mutableStateOf(false) }
@@ -1213,6 +1277,11 @@ fun ShenlongPlayMusicApp() {
     var bgColorName by remember { mutableStateOf("Claro") }
     var bgTransparency by remember { mutableStateOf(0f) }
     var showBgColorDialog by remember { mutableStateOf(false) }
+    // Color de letras (v1.7): igual que el de tarjetas y el de fondo.
+    val textColorSettings = remember { TextColorSettings(context) }
+    var textColorName by remember { mutableStateOf("Negro") }
+    var textTransparency by remember { mutableStateOf(0f) }
+    var showTextColorDialog by remember { mutableStateOf(false) }
     val rotationSettings = remember { RotationSettings(context) }
     var rotationAllowed by remember { mutableStateOf(true) }
     val visualizerSettings = remember { VisualizerSettings(context) }
@@ -1305,6 +1374,8 @@ fun ShenlongPlayMusicApp() {
         cardTransparency = cardColorSettings.transparencyFlow.first()
         bgColorName = bgColorSettings.colorNameFlow.first()
         bgTransparency = bgColorSettings.transparencyFlow.first()
+        textColorName = textColorSettings.colorNameFlow.first()
+        textTransparency = textColorSettings.transparencyFlow.first()
         rotationAllowed = rotationSettings.allowedFlow.first()
         vizStyle = visualizerSettings.styleFlow.first()
         EqManager.setEnabled(eqEnabled)
@@ -1334,6 +1405,10 @@ fun ShenlongPlayMusicApp() {
         scope.launch { bgColorSettings.save(bgColorName, bgTransparency) }
     }
 
+    fun saveTextColor() {
+        scope.launch { textColorSettings.save(textColorName, textTransparency) }
+    }
+
     fun saveRotation() {
         scope.launch { rotationSettings.save(rotationAllowed) }
     }
@@ -1349,6 +1424,11 @@ fun ShenlongPlayMusicApp() {
     // Color de fondo de la app (v1.3), igual: color fijo + transparencia.
     val bgColor = CardColorOptions.firstOrNull { it.first == bgColorName }?.second ?: LightBg
     val appBg = bgColor.copy(alpha = (1f - bgTransparency).coerceIn(0f, 1f))
+    // Color de las letras (v1.7): color fijo + transparencia, aplicado
+    // como color de texto principal (LocalContentColor) en la vista
+    // vertical. Por defecto "Negro", el color de texto de siempre.
+    val textColor = CardColorOptions.firstOrNull { it.first == textColorName }?.second ?: Color.Black
+    val appText = textColor.copy(alpha = (1f - textTransparency).coerceIn(0f, 1f))
 
     fun refreshSongs() {
         songs = loadSongs(context)
@@ -1450,6 +1530,15 @@ fun ShenlongPlayMusicApp() {
         selectedVideoFolder = null
     }
 
+    // Video a pantalla completa en horizontal (v1.6): modo inmersivo,
+    // se ocultan la barra de estado (batería, señal, hora) y la barra
+    // de navegación; al salir (volver a vertical, cerrar el video o
+    // entrar en la ventanita PiP) vuelven a aparecer.
+    val fullscreenVideo = playingVideo != null && isLandscape && !isInPip
+    LaunchedEffect(fullscreenVideo) {
+        (activity as? MainActivity)?.setImmersiveVideo(fullscreenVideo)
+    }
+
     // Video a pantalla completa (v1.3): SOLO en horizontal. En vertical
     // el video se ve arriba en tamaño normal, estilo YouTube (v1.4),
     // con la lista debajo; solo al girar a horizontal (o pulsar
@@ -1458,6 +1547,8 @@ fun ShenlongPlayMusicApp() {
         VideoPlayerScreen(
             isLandscape = isLandscape,
             isInPip = isInPip,
+            resizeMode = videoResizeMode,
+            onCycleResizeMode = { cycleVideoResizeMode() },
             onClose = { closeVideoScreen() },
             onStop = { stopVideoScreen() },
             onRotate = { if (isLandscape) rotateToPortrait() else rotateToLandscape() }
@@ -1491,6 +1582,13 @@ fun ShenlongPlayMusicApp() {
         return
     }
 
+    // Color de letras (v1.7): todo el texto principal sin color propio
+    // toma el color de letras elegido; los textos con color fijo (título
+    // neón, subtítulos grises, avisos y colores de estado como el
+    // aleatorio naranja o el repetir rojo) no cambian. Las pantallas en
+    // horizontal (video y visualizador a pantalla completa) quedan fuera:
+    // van sobre fondo negro con su texto blanco de siempre.
+    CompositionLocalProvider(LocalContentColor provides appText) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1501,6 +1599,8 @@ fun ShenlongPlayMusicApp() {
         // el botón de pantalla completa) se expande a toda la pantalla.
         if (playingVideo != null && !isLandscape) {
             VideoInlinePlayer(
+                resizeMode = videoResizeMode,
+                onCycleResizeMode = { cycleVideoResizeMode() },
                 onClose = { closeVideoScreen() },
                 onStop = { stopVideoScreen() },
                 onFullscreen = { rotateToLandscape() }
@@ -1604,6 +1704,13 @@ fun ShenlongPlayMusicApp() {
                                     text = { Text("Color de fondo", fontSize = 14.sp) },
                                     onClick = {
                                         showBgColorDialog = true
+                                        showSettingsMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Color de letras", fontSize = 14.sp) },
+                                    onClick = {
+                                        showTextColorDialog = true
                                         showSettingsMenu = false
                                     }
                                 )
@@ -2693,6 +2800,65 @@ fun ShenlongPlayMusicApp() {
             )
         }
 
+        // ---- Diálogo de color de letras: igual que el de tarjetas ----
+        if (showTextColorDialog) {
+            AlertDialog(
+                onDismissRequest = { showTextColorDialog = false },
+                title = { Text("Color de letras", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("Elige un color fijo:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        ColorPickerRow(
+                            selectedName = textColorName,
+                            onSelect = { name ->
+                                textColorName = name
+                                saveTextColor()
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(text = "Color: $textColorName", fontSize = 12.sp, color = Color.DarkGray)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Transparencia: ${(textTransparency * 100).toInt()}%",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "0% = letras opacas, 100% = casi transparentes.",
+                            fontSize = 12.sp,
+                            color = Color.DarkGray
+                        )
+                        Slider(
+                            value = textTransparency,
+                            onValueChange = { textTransparency = it },
+                            onValueChangeFinished = { saveTextColor() },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        // Vista previa con el color de letras y el fondo
+                        // elegidos: así se ve el texto sobre el fondo.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .background(appBg, RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(text = "Así se ven las letras", fontSize = 12.sp, color = appText)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        saveTextColor()
+                        showTextColorDialog = false
+                    }) { Text("Listo", fontSize = 12.sp) }
+                }
+            )
+        }
+
         // ---- Diálogo de estilo de visualización ----
         if (showVizStyleDialog) {
             AlertDialog(
@@ -2757,6 +2923,7 @@ fun ShenlongPlayMusicApp() {
             )
         }
     }
+    }
 }
 // ---------------------------------------------------------------------------
 // Botón compacto: 36 dp de alto, letra 12 sp, peso igual en la fila.
@@ -2798,7 +2965,13 @@ fun TransportIconButton(
     description: String,
     color: Color,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // Color del icono cuando está apagado (v1.6): en la tarjeta de
+    // música el fondo es claro y el negro se ve bien, pero a pantalla
+    // completa el fondo es negro y un icono negro desaparece; ahí se
+    // pasa blanco para que aleatorio y repetir se vean apagados pero
+    // visibles.
+    unselectedTint: Color = Color.Black
 ) {
     IconButton(
         onClick = onClick,
@@ -2812,7 +2985,7 @@ fun TransportIconButton(
         Icon(
             imageVector = icon,
             contentDescription = description,
-            tint = if (selected) color else Color.Black,
+            tint = if (selected) color else unselectedTint,
             modifier = Modifier.size(24.dp)
         )
     }
@@ -3090,6 +3263,12 @@ fun FullscreenVisualizer(
                 // aleatorio, anterior, play/pausa, stop, siguiente y
                 // repetir — todos de 48 dp, con el estado activo visible
                 // (aleatorio naranja y repetir rojo al activarse).
+                // (v1.6) Los botones apagados se pintaban de negro y
+                // sobre el fondo negro no se veían: por eso en horizontal
+                // no aparecían aleatorio ni repetir cuando estaban
+                // apagados, aunque en vertical (fondo claro) sí se veían.
+                // Ahora apagados se ven blancos, y al activarse toman su
+                // color (naranja/rojo) con el fondo redondeado.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
@@ -3100,7 +3279,8 @@ fun FullscreenVisualizer(
                         description = if (shuffle) "Aleatorio activado" else "Aleatorio",
                         color = NeonOrange,
                         selected = shuffle,
-                        onClick = onToggleShuffle
+                        onClick = onToggleShuffle,
+                        unselectedTint = Color.White
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     TransportIconButton(
@@ -3140,7 +3320,8 @@ fun FullscreenVisualizer(
                         description = PlayerManager.repeatLabel(),
                         color = NeonRed,
                         selected = repeatMode != 0,
-                        onClick = onCycleRepeat
+                        onClick = onCycleRepeat,
+                        unselectedTint = Color.White
                     )
                 }
             }
@@ -3193,6 +3374,89 @@ fun VideoThumbnail(video: VideoItem) {
 }
 
 // ---------------------------------------------------------------------------
+// Modos de ajuste del video (v1.6): 0 = Ajustar (se ve completo sin
+// recortar, con bandas negras si hace falta), 1 = Rellenar (llena toda
+// la pantalla aunque recorte los bordes), 2 = Original (tamaño real del
+// video en píxeles, centrado; si es más grande que la pantalla se
+// recorta). Equivale a los modos RESIZE_MODE_FIT / FILL / ZOOM de
+// PlayerView, pero aquí el video se dibuja en un SurfaceView y el
+// tamaño se calcula a mano: para Rellenar la superficie se hace más
+// grande que su contenedor y el contenedor la recorta (clipToBounds).
+// ---------------------------------------------------------------------------
+
+fun videoResizeModeName(mode: Int): String = when (mode) {
+    1 -> "Rellenar"
+    2 -> "Original"
+    else -> "Ajustar"
+}
+
+@Composable
+fun VideoSurface(
+    mode: Int,
+    videoWidth: Int,
+    videoHeight: Int,
+    modifier: Modifier = Modifier
+) {
+    val aspect = if (videoWidth > 0 && videoHeight > 0) {
+        videoWidth.toFloat() / videoHeight
+    } else 16f / 9f
+    BoxWithConstraints(
+        modifier = modifier.clipToBounds(),
+        contentAlignment = Alignment.Center
+    ) {
+        val boxWidth = maxWidth
+        val boxHeight = maxHeight
+        val density = LocalDensity.current
+        // Tamaño de la superficie según el modo elegido.
+        val surfaceModifier = when (mode) {
+            1 -> {
+                // Rellenar: el rectángulo más pequeño de la proporción
+                // del video que cubre toda la pantalla (recorta bordes).
+                if (boxWidth / boxHeight > aspect) {
+                    Modifier.size(boxWidth, boxWidth / aspect)
+                } else {
+                    Modifier.size(boxHeight * aspect, boxHeight)
+                }
+            }
+            2 -> {
+                // Original: tamaño real en píxeles pasado a dp.
+                val widthDp = with(density) { videoWidth.toDp() }
+                val heightDp = with(density) { videoHeight.toDp() }
+                Modifier.size(widthDp, heightDp)
+            }
+            else -> {
+                // Ajustar: el rectángulo más grande de la proporción del
+                // video que cabe en la pantalla (sin recortar).
+                Modifier.fillMaxSize().aspectRatio(aspect)
+            }
+        }
+        AndroidView(
+            factory = { ctx ->
+                SurfaceView(ctx).apply {
+                    holder.addCallback(object : SurfaceHolder.Callback {
+                        override fun surfaceCreated(holder: SurfaceHolder) {
+                            PlayerManager.setVideoSurface(this@apply)
+                        }
+
+                        override fun surfaceChanged(
+                            holder: SurfaceHolder,
+                            format: Int,
+                            width: Int,
+                            height: Int
+                        ) {
+                        }
+
+                        override fun surfaceDestroyed(holder: SurfaceHolder) {}
+                    })
+                }
+            },
+            update = { view -> PlayerManager.setVideoSurface(view) },
+            modifier = surfaceModifier
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Video en vertical estilo YouTube (v1.4): el video arriba en tamaño
 // normal (16:9) con sus controles debajo, y la lista de videos debajo
 // en la pantalla principal. Solo al girar a horizontal (o pulsar
@@ -3201,6 +3465,8 @@ fun VideoThumbnail(video: VideoItem) {
 
 @Composable
 fun VideoInlinePlayer(
+    resizeMode: Int,
+    onCycleResizeMode: () -> Unit,
     onClose: () -> Unit,
     onStop: () -> Unit,
     onFullscreen: () -> Unit
@@ -3225,27 +3491,13 @@ fun VideoInlinePlayer(
             .fillMaxWidth()
             .background(Color.Black)
     ) {
-        AndroidView(
-            factory = { ctx ->
-                SurfaceView(ctx).apply {
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(holder: SurfaceHolder) {
-                            PlayerManager.setVideoSurface(this@apply)
-                        }
-
-                        override fun surfaceChanged(
-                            holder: SurfaceHolder,
-                            format: Int,
-                            width: Int,
-                            height: Int
-                        ) {
-                        }
-
-                        override fun surfaceDestroyed(holder: SurfaceHolder) {}
-                    })
-                }
-            },
-            update = { view -> PlayerManager.setVideoSurface(view) },
+        // Superficie del video con el modo de ajuste elegido (v1.6):
+        // en vertical ocupa su franja 16:9 y el modo Rellenar u Original
+        // se recorta dentro de esa franja.
+        VideoSurface(
+            mode = resizeMode,
+            videoWidth = video?.width ?: 0,
+            videoHeight = video?.height ?: 0,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)
@@ -3267,11 +3519,22 @@ fun VideoInlinePlayer(
                         color = Color.White
                     )
                     Text(
-                        text = "Video • ${formatTime(durationMs)}",
+                        text = "Video • ${formatTime(durationMs)} • ${videoResizeModeName(resizeMode)}",
                         fontSize = 12.sp,
                         color = Color.LightGray
                     )
                 }
+                // Botón de ajuste de video (v1.6): cambia entre Ajustar,
+                // Rellenar y Original; el modo actual se ve en el texto
+                // de arriba. Funciona también en vertical.
+                TransportIconButton(
+                    icon = Icons.Default.AspectRatio,
+                    description = "Ajuste de video: ${videoResizeModeName(resizeMode)} (pulsa para cambiar)",
+                    color = Color.White,
+                    selected = true,
+                    onClick = onCycleResizeMode
+                )
+                Spacer(modifier = Modifier.width(6.dp))
                 TransportIconButton(
                     icon = Icons.Default.Fullscreen,
                     description = "Pantalla completa",
@@ -3367,6 +3630,8 @@ fun VideoInlinePlayer(
 fun VideoPlayerScreen(
     isLandscape: Boolean,
     isInPip: Boolean = false,
+    resizeMode: Int,
+    onCycleResizeMode: () -> Unit,
     onClose: () -> Unit,
     onStop: () -> Unit,
     onRotate: () -> Unit
@@ -3403,30 +3668,15 @@ fun VideoPlayerScreen(
             .background(Color.Black)
             .clickable { showControls = !showControls }
     ) {
-        AndroidView(
-            factory = { ctx ->
-                SurfaceView(ctx).apply {
-                    // Si Android suelta y vuelve a crear la superficie
-                    // (por ejemplo al volver de PiP), se vuelve a
-                    // enganchar sola (v1.4).
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(holder: SurfaceHolder) {
-                            PlayerManager.setVideoSurface(this@apply)
-                        }
-
-                        override fun surfaceChanged(
-                            holder: SurfaceHolder,
-                            format: Int,
-                            width: Int,
-                            height: Int
-                        ) {
-                        }
-
-                        override fun surfaceDestroyed(holder: SurfaceHolder) {}
-                    })
-                }
-            },
-            update = { view -> PlayerManager.setVideoSurface(view) },
+        // Superficie del video con el modo de ajuste elegido (v1.6).
+        // En horizontal ocupa toda la pantalla; con Rellenar se recortan
+        // los bordes y con Original se ve a tamaño real. La barra de
+        // estado y la de navegación están ocultas (modo inmersivo) mientras
+        // esta pantalla está abierta en horizontal.
+        VideoSurface(
+            mode = resizeMode,
+            videoWidth = video?.width ?: 0,
+            videoHeight = video?.height ?: 0,
             modifier = Modifier.fillMaxSize()
         )
         // En la ventanita PiP no se dibujan los controles de pantalla
@@ -3451,11 +3701,22 @@ fun VideoPlayerScreen(
                             color = Color.White
                         )
                         Text(
-                            text = "Video • ${formatTime(durationMs)}",
+                            text = "Video • ${formatTime(durationMs)} • ${videoResizeModeName(resizeMode)}",
                             fontSize = 12.sp,
                             color = Color.LightGray
                         )
                     }
+                    // Botón de ajuste de video (v1.6): cambia entre
+                    // Ajustar, Rellenar y Original; el modo actual se ve
+                    // en el texto de arriba.
+                    TransportIconButton(
+                        icon = Icons.Default.AspectRatio,
+                        description = "Ajuste de video: ${videoResizeModeName(resizeMode)} (pulsa para cambiar)",
+                        color = Color.White,
+                        selected = true,
+                        onClick = onCycleResizeMode
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
                     TransportIconButton(
                         icon = Icons.Default.ScreenRotation,
                         description = "Girar pantalla",
@@ -3650,8 +3911,8 @@ fun NowPlayingCard(
 // ---------------------------------------------------------------------------
 // Fila de colores con desplazamiento horizontal (v1.3): los 17 colores
 // fijos en círculos de 36 dp; se desliza para ver todos sin que ninguno
-// se corte a la derecha. La usan los diálogos de color de tarjetas y
-// de color de fondo.
+// se corte a la derecha. La usan los diálogos de color de tarjetas, de
+// color de fondo y de color de letras (v1.7).
 // ---------------------------------------------------------------------------
 
 @Composable

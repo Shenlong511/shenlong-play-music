@@ -121,6 +121,40 @@ la 1.5 porque hacía que la app se cerrara al abrir.)
   música y la de videos, sin entrar a Ajustes. Al cambiar se pausa lo que
   esté sonando.
 
+## Novedades de la 1.7 (color de letras)
+
+- Color de letras en Ajustes, igual que el color de tarjetas y el de
+  fondo: 17 colores fijos con fila deslizable, más deslizador de
+  transparencia 0-100% con vista previa en vivo (el texto elegido
+  sobre el fondo elegido). Se guarda en DataStore y se aplica a los
+  textos principales: nombres de canciones y artistas, encabezados,
+  textos de las tarjetas y de las vistas (Canciones, Carpetas, Listas,
+  Ecualizador, Videos) y a los diálogos. Por defecto queda en Negro,
+  el color de texto de siempre, así que si no se toca nada no cambia
+  nada. Los textos con color fijo no cambian: títulos neón,
+  subtítulos grises, avisos en rojo y los colores de estado (aleatorio
+  naranja, repetir rojo, botones de transporte). Las pantallas en
+  horizontal (video y visualizador a pantalla completa) siguen con su
+  texto blanco sobre fondo negro para que siempre se lea bien.
+
+## Novedades de la 1.6 (video inmersivo, ajuste de pantalla, aleatorio/repetir visibles en horizontal)
+
+- Video en horizontal inmersivo de verdad: al ver un video a pantalla
+  completa en horizontal se ocultan la barra de estado (batería, señal,
+  hora) y la barra de navegación; vuelven a aparecer al salir de
+  pantalla completa, volver a vertical o entrar en la ventanita PiP.
+  Deslizar desde el borde las muestra un momento sin salir del video.
+- Botón de ajuste de video en los controles (vertical y horizontal):
+  cambia entre Ajustar (se ve completo sin recortar), Rellenar (llena
+  toda la pantalla aunque recorte los bordes) y Original (tamaño real
+  del video); el modo actual se ve junto a la duración del video.
+- Aleatorio y repetir ya se ven en la música en horizontal: estaban en
+  el código pero apagados se pintaban de negro sobre el fondo negro y
+  no se veían (en vertical el fondo es claro y sí se veían). Ahora
+  apagados se ven blancos y al activarse toman su color (naranja el
+  aleatorio, rojo el repetir), igual que en vertical, y aparecen al
+  pulsar la pantalla como los demás controles.
+
 ## Novedades de la 1.5 (Cast quitado, lo demás de la 1.4 se queda)
 
 - Cast quitado por completo: sin botón Cast, sin CastManager, sin
