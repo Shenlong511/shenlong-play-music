@@ -11,13 +11,16 @@ la 1.5 porque hacía que la app se cerrara al abrir.)
   OGG, OPUS, MIDI, AMR.
 - Lista de canciones con búsqueda (lupa vectorial de 48 dp que se expande),
   y reproducción por carpetas (se pueden ocultar carpetas y volver a
-  mostrarlas una por una en "Carpetas ocultas").
+  mostrarlas una por una en "Carpetas ocultas"). Las canciones de una
+  carpeta oculta tampoco salen en "Todas las canciones" ni en las listas
+  de reproducción, y vuelven a aparecer al mostrar la carpeta.
 - Listas de reproducción: crear listas con nombre, agregar canciones
   (botón + de cada canción), quitar canciones y borrar listas. Las listas
   y las carpetas ocultas se guardan en el teléfono (DataStore).
 - Botón de ajustes (engranaje) en el encabezado con menú desplegable:
   Todas las canciones, Carpetas, Listas de reproducción, Videos, Color de
-  tarjetas, Color de fondo, Visualización y Ecualizador. También tiene el
+  tarjetas, Color de fondo, Color de letras, Color de carpetas,
+  Visualización y Ecualizador. También tiene el
   interruptor "Permitir giro de pantalla": apagado, la app queda fija en
   vertical.
 - Color de tarjetas y Color de fondo: color fijo (17 colores, en una fila
@@ -120,6 +123,52 @@ la 1.5 porque hacía que la app se cerrara al abrir.)
   la lupa y el engranaje) que con un solo toque cambia entre la lista de
   música y la de videos, sin entrar a Ajustes. Al cambiar se pausa lo que
   esté sonando.
+
+## Novedades de la 1.8 (título neón, cambio de sección, carpetas ocultas en Toda la música, visualizador inmersivo, color de carpetas, notificación sin sonido)
+
+- Título de la app con sus colores neón por palabra: "Shenlong" rosa,
+  "Play" azul y "Music" verde, como en la captura. Los colores van
+  explícitos en el título, así que la opción "Color de letras" no los
+  cambia.
+- Al cambiar de sección (música a video o al revés) ya no se vuelve
+  siempre a "Todas las canciones": se conserva la vista donde estaba el
+  usuario (por ejemplo, la lista de videos con su carpeta) y la
+  reproducción sigue funcionando al volver. Antes, cerrar un video
+  reseteaba toda la navegación, el reproductor de video quedaba en
+  pantalla con la imagen suelta (negro) mientras sonaba una canción, y
+  un stop que llegaba tarde podía parar la canción o el video que acababa
+  de empezar (el intent de detener es asíncrono). Ahora la superficie de
+  video se suelta y se olvida al empezar una canción, la pantalla de
+  video se cierra sola cuando ya no hay video, y cada stop lleva la
+  generación de reproducción de cuando se pidió: si ya empezó algo nuevo,
+  el stop viejo se ignora.
+- Los videos ya llevan su paisaje como carátula en los metadatos (igual
+  que las canciones), así que la pantalla de bloqueo muestra la imagen
+  del video al cambiar de sección o de video, y la notificación usa el
+  mismo paisaje.
+- Carpetas ocultas en "Todas las canciones": las canciones de una carpeta
+  oculta ya no salen en Toda la música ni en las listas de reproducción
+  (antes solo desaparecían de la vista Carpetas). Al volver a mostrar la
+  carpeta, sus canciones vuelven a aparecer. El contador del encabezado
+  tampoco cuenta las canciones y videos de carpetas ocultas.
+- Visualizador de música en horizontal a pantalla completa absoluta, igual
+  que el video: se ocultan la barra de estado (batería, señal, hora) y la
+  barra de navegación, y vuelven al salir de horizontal o al cerrar.
+- Color de carpetas en Ajustes, igual que el color de tarjetas, el de
+  fondo y el de letras: 17 colores fijos con fila deslizable, más
+  deslizador de transparencia 0-100% con vista previa en vivo. Se guarda
+  en DataStore y se aplica al icono de las carpetas de música y de video
+  (también a las filas de carpetas ocultas, con el color elegido más
+  suave). Por defecto queda en Verde, el color que ya tenían las
+  carpetas, así que si no se toca nada no cambia nada.
+- La notificación de reproducción ya no suena: el canal era con sonido y
+  cada vez que la notificación se quitaba y se volvía a publicar (al
+  cambiar de sección, al parar y poner otra canción o video) sonaba de
+  nuevo, una y otra vez. Ahora el canal es silencioso (sin sonido y con
+  importancia baja) y se borra el canal viejo al arrancar el servicio
+  para que el cambio surta efecto en el teléfono aunque el canal ya
+  existiera. La notificación sigue apareciendo en la barra y en la
+  pantalla de bloqueo con sus controles, solo que sin sonar nunca.
 
 ## Novedades de la 1.7 (color de letras)
 

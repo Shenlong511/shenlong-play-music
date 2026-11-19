@@ -165,6 +165,21 @@ object LandscapeArt {
 
     fun artworkBytesForSong(song: Song): ByteArray = artworkBytes(indexForSong(song))
 
+    /**
+     * Paisaje que toca a cada video (v1.8): igual que las canciones,
+     * estable por video según su id de MediaStore, así que el mismo
+     * video siempre muestra el mismo paisaje en la notificación y en
+     * la pantalla de bloqueo.
+     */
+    fun indexForVideo(video: VideoItem): Int {
+        val idx = ((video.id % COUNT) + COUNT) % COUNT
+        return idx.toInt()
+    }
+
+    fun bitmapForVideo(video: VideoItem): Bitmap = bitmap(indexForVideo(video))
+
+    fun artworkBytesForVideo(video: VideoItem): ByteArray = artworkBytes(indexForVideo(video))
+
     fun bitmap(index: Int, size: Int = 512): Bitmap {
         val i = ((index % COUNT) + COUNT) % COUNT
         synchronized(bitmapCache) {

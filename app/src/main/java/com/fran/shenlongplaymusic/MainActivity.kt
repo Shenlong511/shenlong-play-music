@@ -121,6 +121,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -193,6 +196,19 @@ val NeonYellow = Color(0xFFFFC107)
 val NeonPurple = Color(0xFF9C27B0)
 val LightBg = Color(0xFFF7F7FF)
 val NeonColors = listOf(NeonBlue, NeonPink, NeonRed, NeonGreen, NeonOrange, NeonYellow, NeonPurple)
+
+// Título de la app (v1.8): "Shenlong" rosa, "Play" azul y "Music"
+// verde, como en la captura de Fran. Los colores van explícitos por
+// palabra (SpanStyle), así que la opción "Color de letras" (que cambia
+// el LocalContentColor de la vista) NO los afecta: el título siempre
+// conserva sus colores neón originales.
+fun appTitleText(): AnnotatedString = buildAnnotatedString {
+    withStyle(SpanStyle(color = NeonPink)) { append("Shenlong") }
+    append(" ")
+    withStyle(SpanStyle(color = NeonBlue)) { append("Play") }
+    append(" ")
+    withStyle(SpanStyle(color = NeonGreen)) { append("Music") }
+}
 
 // ---------------------------------------------------------------------------
 // Ecualizador: presets (niveles en milibelios, -1500 a +1500, 5 bandas)
@@ -368,6 +384,32 @@ class TextColorSettings(private val context: Context) {
 
     val colorNameFlow: Flow<String> =
         context.dataStore.data.map { it[colorKey] ?: "Negro" }
+    val transparencyFlow: Flow<Float> =
+        context.dataStore.data.map { (it[transparencyKey] ?: 0f).coerceIn(0f, 1f) }
+
+    suspend fun save(colorName: String, transparency: Float) {
+        context.dataStore.edit { prefs ->
+            prefs[colorKey] = colorName
+            prefs[transparencyKey] = transparency.coerceIn(0f, 1f)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Color de las carpetas (DataStore, v1.8): igual que el de tarjetas, el
+// de fondo y el de letras, color fijo + transparencia, aplicado al icono
+// de las carpetas de música y de video. Por defecto "Verde", el color
+// que ya tenían las carpetas de música, así que si no se toca nada no
+// cambia nada (las de video eran rosas y pasan a verde, igual que las
+// de música; si Fran quiere el rosa de antes, lo elige en el diálogo).
+// ---------------------------------------------------------------------------
+
+class FolderColorSettings(private val context: Context) {
+    private val colorKey = stringPreferencesKey("folder_color_name")
+    private val transparencyKey = floatPreferencesKey("folder_transparency")
+
+    val colorNameFlow: Flow<String> =
+        context.dataStore.data.map { it[colorKey] ?: "Verde" }
     val transparencyFlow: Flow<Float> =
         context.dataStore.data.map { (it[transparencyKey] ?: 0f).coerceIn(0f, 1f) }
 
@@ -656,6 +698,23 @@ object PlayerManager {
     var currentVideoIndex: Int = -1
         private set
 
+    /**
+     * Generación de reproducción (v1.8): sube cada vez que empieza una
+     * canción o un video nuevo. Sirve para ignorar un STOP viejo que
+     * llegue tarde: el intent de detener del servicio es asíncrono, así
+     * que si entre pedir el stop y que el servicio lo reciba ya empezó
+     * algo nuevo, ese stop ya no vale y no debe parar lo nuevo.
+     */
+    private val _playbackGeneration = MutableStateFlow(0)
+    val playbackGeneration: StateFlow<Int> = _playbackGeneration.asStateFlow()
+
+    /** STOP solo si no empezó nada nuevo desde que se pidió (v1.8). */
+    fun stopPlaybackIfNotStartedSince(token: Int): Boolean {
+        if (_playbackGeneration.value != token) return false
+        stopPlayback()
+        return true
+    }
+
     fun pause() {
         player?.pause()
     }
@@ -691,6 +750,17 @@ object PlayerManager {
     fun setVideoSurface(view: SurfaceView?) {
         lastVideoSurface = view
         player?.setVideoSurfaceView(view)
+    }
+
+    /**
+     * Quita la superficie de video y la olvida (v1.8): al empezar una
+     * canción, la superficie del video queda suelta; si no se olvida,
+     * reattachVideoSurface la volvería a enganchar ya muerta y el
+     * siguiente video se oiría pero no se vería (pantalla negra).
+     */
+    fun clearVideoSurface() {
+        lastVideoSurface = null
+        player?.setVideoSurfaceView(null)
     }
 
     /**
@@ -786,7 +856,11 @@ object PlayerManager {
         _currentVideo.value = null
         videoPlaylist = emptyList()
         currentVideoIndex = -1
-        p.setVideoSurfaceView(null)
+        // (v1.8) Se suelta la superficie Y se olvida: si solo se suelta,
+        // reattachVideoSurface la reengancharía ya muerta y el siguiente
+        // video se oiría pero no se vería.
+        clearVideoSurface()
+        _playbackGeneration.value += 1
         playlist = songs
         currentIndex = startIndex.coerceIn(0, songs.size - 1)
         val items = songs.mapIndexed { i, song ->
@@ -836,6 +910,7 @@ object PlayerManager {
         _currentSong.value = null
         playlist = emptyList()
         currentIndex = -1
+        _playbackGeneration.value += 1
         videoPlaylist = allVideos
         currentVideoIndex = allVideos.indexOf(video).coerceAtLeast(0)
         val items = allVideos.mapIndexed { i, item ->
@@ -844,6 +919,14 @@ object PlayerManager {
                     MediaMetadata.Builder()
                         .setTitle(item.title)
                         .setArtist("Video")
+                        // (v1.8) Carátula del video: un paisaje como el de
+                        // las canciones, para que la pantalla de bloqueo
+                        // muestre la imagen del video y no quede en blanco
+                        // al cambiar de sección o de video.
+                        .setArtworkData(
+                            LandscapeArt.artworkBytesForVideo(item),
+                            MediaMetadata.PICTURE_TYPE_FRONT_COVER
+                        )
                         .build()
                 )
                 .build()
@@ -1203,14 +1286,14 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Video a pantalla completa de verdad (v1.6): en horizontal se
-     * ocultan la barra de estado (batería, señal, hora) y la barra de
-     * navegación, y el video ocupa toda la pantalla. Al salir de
-     * pantalla completa (o volver a vertical, o entrar en PiP) vuelven
-     * a aparecer. Con BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE, deslizar
-     * desde el borde las muestra un momento sin salir del video.
+     * Pantalla completa de verdad (v1.6 video, v1.8 visualizador de
+     * música): en horizontal se ocultan la barra de estado (batería,
+     * señal, hora) y la barra de navegación, y la pantalla ocupa todo.
+     * Al salir de pantalla completa (o volver a vertical, o entrar en
+     * PiP) vuelven a aparecer. Con BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE,
+     * deslizar desde el borde las muestra un momento sin salir.
      */
-    fun setImmersiveVideo(fullscreen: Boolean) {
+    fun setImmersive(fullscreen: Boolean) {
         try {
             WindowCompat.setDecorFitsSystemWindows(window, !fullscreen)
             val controller = WindowCompat.getInsetsController(window, window.decorView)
@@ -1282,6 +1365,12 @@ fun ShenlongPlayMusicApp() {
     var textColorName by remember { mutableStateOf("Negro") }
     var textTransparency by remember { mutableStateOf(0f) }
     var showTextColorDialog by remember { mutableStateOf(false) }
+    // Color de carpetas (v1.8): igual que los demás colores, para las
+    // carpetas de música y de video.
+    val folderColorSettings = remember { FolderColorSettings(context) }
+    var folderColorName by remember { mutableStateOf("Verde") }
+    var folderTransparency by remember { mutableStateOf(0f) }
+    var showFolderColorDialog by remember { mutableStateOf(false) }
     val rotationSettings = remember { RotationSettings(context) }
     var rotationAllowed by remember { mutableStateOf(true) }
     val visualizerSettings = remember { VisualizerSettings(context) }
@@ -1376,6 +1465,8 @@ fun ShenlongPlayMusicApp() {
         bgTransparency = bgColorSettings.transparencyFlow.first()
         textColorName = textColorSettings.colorNameFlow.first()
         textTransparency = textColorSettings.transparencyFlow.first()
+        folderColorName = folderColorSettings.colorNameFlow.first()
+        folderTransparency = folderColorSettings.transparencyFlow.first()
         rotationAllowed = rotationSettings.allowedFlow.first()
         vizStyle = visualizerSettings.styleFlow.first()
         EqManager.setEnabled(eqEnabled)
@@ -1409,6 +1500,10 @@ fun ShenlongPlayMusicApp() {
         scope.launch { textColorSettings.save(textColorName, textTransparency) }
     }
 
+    fun saveFolderColor() {
+        scope.launch { folderColorSettings.save(folderColorName, folderTransparency) }
+    }
+
     fun saveRotation() {
         scope.launch { rotationSettings.save(rotationAllowed) }
     }
@@ -1429,6 +1524,11 @@ fun ShenlongPlayMusicApp() {
     // vertical. Por defecto "Negro", el color de texto de siempre.
     val textColor = CardColorOptions.firstOrNull { it.first == textColorName }?.second ?: Color.Black
     val appText = textColor.copy(alpha = (1f - textTransparency).coerceIn(0f, 1f))
+    // Color de las carpetas (v1.8): color fijo + transparencia, aplicado
+    // al icono de las carpetas de música y de video. Por defecto
+    // "Verde", el color que ya tenían las carpetas de música.
+    val folderColor = CardColorOptions.firstOrNull { it.first == folderColorName }?.second ?: NeonGreen
+    val folderBg = folderColor.copy(alpha = (1f - folderTransparency).coerceIn(0f, 1f))
 
     fun refreshSongs() {
         songs = loadSongs(context)
@@ -1480,12 +1580,21 @@ fun ShenlongPlayMusicApp() {
         }
     }
     // Canciones de la lista elegida (por orden en que se agregaron).
+    // (v1.8) Las canciones de carpetas ocultas tampoco salen en las
+    // listas: se ocultan igual que en "Todas las canciones". La lista
+    // guardada no se toca: al volver a mostrar la carpeta, sus
+    // canciones vuelven a aparecer.
+    fun visiblePlaylistSongs(pl: Playlist): List<Song> =
+        pl.songIds.mapNotNull { id -> songs.firstOrNull { it.id == id } }
+            .filter { it.folder !in hiddenFolders }
     val selectedPlaylistObj = playlists.firstOrNull { it.name == selectedPlaylist }
-    val playlistSongs = remember(songs, selectedPlaylistObj) {
-        selectedPlaylistObj?.songIds?.mapNotNull { id ->
-            songs.firstOrNull { it.id == id }
-        } ?: emptyList()
+    val playlistSongs = remember(songs, selectedPlaylistObj, hiddenFolders) {
+        selectedPlaylistObj?.let { visiblePlaylistSongs(it) } ?: emptyList()
     }
+    // Contadores visibles (v1.8): las canciones y videos de carpetas
+    // ocultas no se cuentan en el encabezado ("1114 canciones...").
+    val visibleSongCount = songs.count { it.folder !in hiddenFolders }
+    val visibleVideoCount = videos.count { it.folder !in hiddenFolders }
     val folders = remember(songs, hiddenFolders) {
         songs.filter { it.folder !in hiddenFolders }
             .groupBy { it.folder }.map { (folder, list) -> folder to list.size }
@@ -1507,14 +1616,15 @@ fun ShenlongPlayMusicApp() {
     // audio sigue en segundo plano; se vuelve a la lista y el video se
     // retoma con "Ver video". No se reabre al salir de PiP porque se
     // marca pipVideoScreenOpen = false antes de salir de la ventanita.
+    // (v1.8) Al cerrar NO se toca la vista: antes se volvía siempre a
+    // "Todas las canciones" aunque el video se hubiera abierto desde la
+    // lista de videos, y ahí ya no se podía reproducir bien el video o
+    // la canción. Ahora se vuelve a la vista donde estaba (la lista de
+    // videos con su carpeta, o las canciones si se abrió desde ahí).
     fun closeVideoScreen() {
         pipVideoScreenOpen = false
         (activity as? MainActivity)?.exitPip()
         playingVideo = null
-        showVideos = false; showFolders = false; showEq = false
-        showPlaylists = false
-        selectedFolder = null; selectedPlaylist = null
-        selectedVideoFolder = null
     }
 
     // Detener el video por completo (v1.4) y volver a la lista de videos.
@@ -1530,13 +1640,24 @@ fun ShenlongPlayMusicApp() {
         selectedVideoFolder = null
     }
 
-    // Video a pantalla completa en horizontal (v1.6): modo inmersivo,
-    // se ocultan la barra de estado (batería, señal, hora) y la barra
-    // de navegación; al salir (volver a vertical, cerrar el video o
-    // entrar en la ventanita PiP) vuelven a aparecer.
-    val fullscreenVideo = playingVideo != null && isLandscape && !isInPip
-    LaunchedEffect(fullscreenVideo) {
-        (activity as? MainActivity)?.setImmersiveVideo(fullscreenVideo)
+    // Al empezar una canción (v1.8): si la pantalla de video seguía
+    // abierta (porque se cambió de sección desde el menú sin detener
+    // nada), se cierra sola. Si no, el reproductor de video quedaba en
+    // pantalla con la imagen ya suelta (negro) mientras sonaba la
+    // canción, y sus botones actuaban sobre un video que ya no existía.
+    LaunchedEffect(currentVideo) {
+        if (currentVideo == null) playingVideo = null
+    }
+
+    // Pantalla completa en horizontal (v1.6 video, v1.8 visualizador de
+    // música): modo inmersivo, se ocultan la barra de estado (batería,
+    // señal, hora) y la barra de navegación; al salir (volver a
+    // vertical, cerrar el video o entrar en la ventanita PiP) vuelven a
+    // aparecer. En horizontal siempre hay una pantalla completa (video
+    // o visualizador de música), así que basta con la orientación.
+    val immersiveFullscreen = isLandscape && !isInPip
+    LaunchedEffect(immersiveFullscreen) {
+        (activity as? MainActivity)?.setImmersive(immersiveFullscreen)
     }
 
     // Video a pantalla completa (v1.3): SOLO en horizontal. En vertical
@@ -1623,18 +1744,22 @@ fun ShenlongPlayMusicApp() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
+                            // Título con sus colores neón por palabra
+                            // (v1.8): "Shenlong" rosa, "Play" azul y
+                            // "Music" verde. Los colores van explícitos,
+                            // así que la opción "Color de letras" no los
+                            // cambia.
                             Text(
-                                text = "Shenlong Play Music",
+                                text = appTitleText(),
                                 fontSize = 22.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = NeonPurple
+                                fontWeight = FontWeight.Bold
                             )
                             Text(
                                 text = if (showVideos) {
                                     if (videos.isEmpty()) "Sin videos todavía"
-                                    else "${videos.size} videos en tu teléfono"
+                                    else "$visibleVideoCount videos en tu teléfono"
                                 } else if (songs.isEmpty()) "Sin canciones todavía"
-                                else "${songs.size} canciones en tu teléfono",
+                                else "$visibleSongCount canciones en tu teléfono",
                                 fontSize = 12.sp,
                                 color = Color.DarkGray
                             )
@@ -1711,6 +1836,13 @@ fun ShenlongPlayMusicApp() {
                                     text = { Text("Color de letras", fontSize = 14.sp) },
                                     onClick = {
                                         showTextColorDialog = true
+                                        showSettingsMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Color de carpetas", fontSize = 14.sp) },
+                                    onClick = {
+                                        showFolderColorDialog = true
                                         showSettingsMenu = false
                                     }
                                 )
@@ -2039,7 +2171,7 @@ fun ShenlongPlayMusicApp() {
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .background(NeonGreen, RoundedCornerShape(8.dp)),
+                                    .background(folderBg, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
@@ -2125,13 +2257,13 @@ fun ShenlongPlayMusicApp() {
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
-                                        .background(NeonPurple.copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
+                                        .background(folderColor.copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         Icons.Default.Folder,
                                         contentDescription = null,
-                                        tint = NeonPurple,
+                                        tint = folderColor,
                                         modifier = Modifier.size(24.dp)
                                     )
                                 }
@@ -2227,7 +2359,7 @@ fun ShenlongPlayMusicApp() {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(text = pl.name, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = "${pl.songIds.size} canciones",
+                                    text = "${visiblePlaylistSongs(pl).size} canciones",
                                     fontSize = 12.sp,
                                     color = Color.DarkGray
                                 )
@@ -2237,9 +2369,7 @@ fun ShenlongPlayMusicApp() {
                                 description = "Reproducir lista",
                                 color = NeonGreen,
                                 onClick = {
-                                    val listSongs = pl.songIds.mapNotNull { id ->
-                                        songs.firstOrNull { it.id == id }
-                                    }
+                                    val listSongs = visiblePlaylistSongs(pl)
                                     if (listSongs.isNotEmpty()) {
                                         PlayerManager.playSong(listSongs[0], listSongs, context)
                                     }
@@ -2428,7 +2558,7 @@ fun ShenlongPlayMusicApp() {
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .background(NeonPink, RoundedCornerShape(8.dp)),
+                                    .background(folderBg, RoundedCornerShape(8.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
@@ -2498,13 +2628,13 @@ fun ShenlongPlayMusicApp() {
                                     Box(
                                         modifier = Modifier
                                             .size(36.dp)
-                                            .background(NeonPurple.copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
+                                            .background(folderColor.copy(alpha = 0.25f), RoundedCornerShape(8.dp)),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             Icons.Default.Folder,
                                             contentDescription = null,
-                                            tint = NeonPurple,
+                                            tint = folderColor,
                                             modifier = Modifier.size(24.dp)
                                         )
                                     }
@@ -2640,7 +2770,7 @@ fun ShenlongPlayMusicApp() {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(text = pl.name, fontSize = 14.sp, modifier = Modifier.weight(1f))
                                 Text(
-                                    text = "${pl.songIds.size} canciones",
+                                    text = "${visiblePlaylistSongs(pl).size} canciones",
                                     fontSize = 12.sp,
                                     color = Color.DarkGray
                                 )
@@ -2854,6 +2984,81 @@ fun ShenlongPlayMusicApp() {
                     TextButton(onClick = {
                         saveTextColor()
                         showTextColorDialog = false
+                    }) { Text("Listo", fontSize = 12.sp) }
+                }
+            )
+        }
+
+        // ---- Diálogo de color de carpetas: igual que el de tarjetas ----
+        if (showFolderColorDialog) {
+            AlertDialog(
+                onDismissRequest = { showFolderColorDialog = false },
+                title = { Text("Color de carpetas", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("Elige un color fijo:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        ColorPickerRow(
+                            selectedName = folderColorName,
+                            onSelect = { name ->
+                                folderColorName = name
+                                saveFolderColor()
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(text = "Color: $folderColorName", fontSize = 12.sp, color = Color.DarkGray)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Transparencia: ${(folderTransparency * 100).toInt()}%",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "0% = carpeta opaca, 100% = casi transparente.",
+                            fontSize = 12.sp,
+                            color = Color.DarkGray
+                        )
+                        Slider(
+                            value = folderTransparency,
+                            onValueChange = { folderTransparency = it },
+                            onValueChangeFinished = { saveFolderColor() },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        // Vista previa con el color y la transparencia
+                        // elegidos: el icono de carpeta como se ve en
+                        // las listas de música y de video.
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .background(cardBg, RoundedCornerShape(12.dp)),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(folderBg, RoundedCornerShape(8.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(text = "Así se ven las carpetas", fontSize = 12.sp)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        saveFolderColor()
+                        showFolderColorDialog = false
                     }) { Text("Listo", fontSize = 12.sp) }
                 }
             )

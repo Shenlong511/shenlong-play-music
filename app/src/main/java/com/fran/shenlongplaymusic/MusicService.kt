@@ -45,6 +45,12 @@ class MusicService : Service() {
 
         fun actionIntent(context: Context, action: String): PendingIntent {
             val intent = Intent(context, MusicService::class.java).setAction(action)
+            // (v1.8) El botón Detener de la notificación lleva la
+            // generación de reproducción de cuando se construyó: si ya
+            // empezó algo nuevo después, el stop es viejo y se ignora.
+            if (action == ACTION_STOP) {
+                intent.putExtra(EXTRA_STOP_TOKEN, PlayerManager.playbackGeneration.value)
+            }
             return PendingIntent.getService(
                 context,
                 action.hashCode(),
@@ -57,8 +63,16 @@ class MusicService : Service() {
         fun stop(context: Context) {
             if (!isRunning) return
             val intent = Intent(context, MusicService::class.java).setAction(ACTION_STOP)
+            // (v1.8) Se guarda la generación de reproducción actual: si
+            // entre pedir el stop y que el servicio lo reciba ya empezó
+            // una canción o un video nuevo, ese stop es viejo y no debe
+            // parar lo nuevo (el intent de detener es asíncrono).
+            intent.putExtra(EXTRA_STOP_TOKEN, PlayerManager.playbackGeneration.value)
             context.startService(intent)
         }
+
+        /** Generación de reproducción que llevaba el intent de detener. */
+        const val EXTRA_STOP_TOKEN = "stop_token"
     }
 
     private var mediaSession: MediaSession? = null
@@ -104,10 +118,18 @@ class MusicService : Service() {
             ACTION_STOP -> {
                 // Stop de verdad (v1.4): se para todo, se libera la cola
                 // y se quita la notificación. No es pausa.
-                PlayerManager.stopPlayback()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
+                // (v1.8) Solo si no empezó nada nuevo desde que se pidió
+                // el stop: el intent es asíncrono y un stop viejo no debe
+                // matar una canción o un video que ya empezó después.
+                val token = intent?.getIntExtra(EXTRA_STOP_TOKEN, -1) ?: -1
+                if (PlayerManager.stopPlaybackIfNotStartedSince(token)) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                // Stop viejo: ya suena algo nuevo; no se para nada y la
+                // notificación se actualiza con lo que suena ahora.
+                updateNotification()
             }
         }
         updateNotification()
@@ -124,16 +146,28 @@ class MusicService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Reproducción de música",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            channel.description = "Controles de Shenlong Play Music"
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
-        }
+        if (Build.VERSION.SDK_INT < 26) return
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        // (v1.8) La notificación de reproducción NO debe sonar: antes el
+        // canal era IMPORTANCE_DEFAULT (con sonido) y cada vez que la
+        // notificación se quitaba y se volvía a publicar (al cambiar de
+        // sección, al parar y poner otra canción o video) sonaba de
+        // nuevo, una y otra vez. Con IMPORTANCE_LOW y sin sonido, la
+        // notificación solo se ve en la barra y en el bloqueo, como la
+        // de cualquier reproductor, y nunca suena, ni al empezar ni al
+        // actualizarse. Se borra primero el canal viejo porque Android
+        // no cambia la importancia de un canal ya creado: si no se
+        // borra, el teléfono de Fran seguiría con el canal con sonido
+        // aunque el código ya diga que no suene.
+        manager.deleteNotificationChannel(CHANNEL_ID)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Reproducción de música",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        channel.description = "Controles de Shenlong Play Music"
+        channel.setSound(null, null)
+        manager.createNotificationChannel(channel)
     }
 
     private fun updateNotification() {
@@ -173,7 +207,7 @@ class MusicService : Service() {
             // cambia con cada canción o video (al pulsar siguiente/anterior
             // se reconstruye la notificación con el paisaje nuevo).
             .setLargeIcon(
-                video?.let { LandscapeArt.bitmap((it.id % LandscapeArt.COUNT).toInt()) }
+                video?.let { LandscapeArt.bitmapForVideo(it) }
                     ?: song?.let { LandscapeArt.bitmapForSong(it) }
             )
             .setContentIntent(contentIntent)
