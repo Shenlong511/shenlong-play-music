@@ -23,7 +23,7 @@ la 1.5 porque hacía que la app se cerrara al abrir.)
   Visualización y Ecualizador. También tiene el
   interruptor "Permitir giro de pantalla": apagado, la app queda fija en
   vertical.
-- Color de tarjetas y Color de fondo: color fijo (17 colores, en una fila
+- Color de tarjetas y Color de fondo: color fijo (25 colores, en una fila
   con desplazamiento para que ninguno se corte) + deslizador de
   transparencia 0-100%, guardados en el teléfono (DataStore).
 - Visualización con 4 estilos (Barras neón, Onda, Círculo y Espejo),
@@ -124,6 +124,41 @@ la 1.5 porque hacía que la app se cerrara al abrir.)
   música y la de videos, sin entrar a Ajustes. Al cambiar se pausa lo que
   esté sonando.
 
+## Novedades de la 2.0 (título grande, carátula al salir por completo de la app, video vertical estilo TikTok, 25 colores)
+
+- Título grande en todas las vistas: la imagen neón arcoíris de
+  "Shenlong Play Music" ahora tiene su propia fila a todo lo ancho,
+  centrada y grande (96 dp de alto) en el encabezado, en la lista
+  principal, en carpetas y en "Sonando ahora". Antes iba en la misma
+  fila que los botones y quedaba chiquita en la esquina.
+- La carátula (paisaje) ya no se pierde al salir por completo de la
+  app y volver después: lo último que sonó (canción o video, con su
+  título y su dirección) se guarda en el teléfono (DataStore) cada vez
+  que empieza algo, y al recrearse el servicio se recupera y se vuelve
+  a poner en el reproductor (en pausa) para que la notificación y la
+  pantalla de bloqueo muestren el paisaje y el título; el botón de
+  reproducir lo retoma desde el principio. Con el STOP de verdad se
+  borra lo guardado, así que nada viejo reaparece.
+- La notificación de reproducción vuelve a verse en la cortina: el
+  canal era de importancia baja (desde la 1.8, para que no sonara) y
+  en el teléfono quedaba escondida; ahora es de importancia normal
+  pero sin sonido, así que se ve en la cortina y en la barra y sigue
+  sin sonar nunca.
+- Video vertical a pantalla completa estilo TikTok: el botón de
+  pantalla completa del reproductor en línea ahora abre el video en
+  vertical a toda la pantalla, llenándola sin bandas negras (modo
+  Rellenar), con los controles encima que se esconden solos a los 3
+  segundos y sin barra de estado ni de navegación. Al salir se
+  devuelve el modo de ajuste que había antes; los modos Ajustar,
+  Rellenar y Original siguen disponibles con el botón de ajuste. El
+  botón de giro dentro de la pantalla completa sigue llevando a
+  horizontal.
+- 25 colores en vez de 17: Color de tarjetas, Color de fondo, Color
+  de letras y Color de carpetas ahora tienen 25 colores fijos en la
+  fila deslizable, con su deslizador de transparencia. Nuevos: Rosa
+  neón (como el pelo rosa del avatar de Zoé), Índigo, Azul marino,
+  Esmeralda, Amarillo neón, Coral, Vino y Lavanda.
+
 ## Novedades de la 1.9 (título como imagen, icono nuevo, carátula que no se pierde al volver a carpetas)
 
 - Título de la app como imagen: en vez del nombre en texto, el encabezado
@@ -176,7 +211,7 @@ la 1.5 porque hacía que la app se cerrara al abrir.)
   que el video: se ocultan la barra de estado (batería, señal, hora) y la
   barra de navegación, y vuelven al salir de horizontal o al cerrar.
 - Color de carpetas en Ajustes, igual que el color de tarjetas, el de
-  fondo y el de letras: 17 colores fijos con fila deslizable, más
+  fondo y el de letras: 25 colores fijos con fila deslizable, más
   deslizador de transparencia 0-100% con vista previa en vivo. Se guarda
   en DataStore y se aplica al icono de las carpetas de música y de video
   (también a las filas de carpetas ocultas, con el color elegido más
@@ -194,7 +229,7 @@ la 1.5 porque hacía que la app se cerrara al abrir.)
 ## Novedades de la 1.7 (color de letras)
 
 - Color de letras en Ajustes, igual que el color de tarjetas y el de
-  fondo: 17 colores fijos con fila deslizable, más deslizador de
+  fondo: 25 colores fijos con fila deslizable, más deslizador de
   transparencia 0-100% con vista previa en vivo (el texto elegido
   sobre el fondo elegido). Se guarda en DataStore y se aplica a los
   textos principales: nombres de canciones y artistas, encabezados,

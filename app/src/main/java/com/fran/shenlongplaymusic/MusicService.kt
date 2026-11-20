@@ -81,6 +81,10 @@ class MusicService : Service() {
         super.onCreate()
         isRunning = true
         PlayerManager.init(this)
+        // (v2.0) Si el proceso murió con algo sonando, se recupera lo
+        // último guardado (título e imagen) y se vuelve a publicar la
+        // notificación ya con la carátula.
+        PlayerManager.restoreLastPlayed(this) { updateNotification() }
         val player = PlayerManager.playerOrNull()
         if (player != null) {
             val activityIntent = Intent(this, MainActivity::class.java)
@@ -148,22 +152,22 @@ class MusicService : Service() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT < 26) return
         val manager = getSystemService(NotificationManager::class.java) ?: return
-        // (v1.8) La notificación de reproducción NO debe sonar: antes el
-        // canal era IMPORTANCE_DEFAULT (con sonido) y cada vez que la
-        // notificación se quitaba y se volvía a publicar (al cambiar de
-        // sección, al parar y poner otra canción o video) sonaba de
-        // nuevo, una y otra vez. Con IMPORTANCE_LOW y sin sonido, la
-        // notificación solo se ve en la barra y en el bloqueo, como la
-        // de cualquier reproductor, y nunca suena, ni al empezar ni al
-        // actualizarse. Se borra primero el canal viejo porque Android
-        // no cambia la importancia de un canal ya creado: si no se
-        // borra, el teléfono de Fran seguiría con el canal con sonido
-        // aunque el código ya diga que no suene.
+        // (v2.0) La notificación de reproducción NO debe sonar, pero SÍ
+        // se tiene que ver en la cortina: en la 1.8 el canal se puso en
+        // IMPORTANCE_LOW (sin sonido) y en el teléfono de Fran la
+        // notificación dejó de aparecer en la cortina al bajarla
+        // (quedaba escondida entre las silenciosas, y solo se veía la
+        // de la grabadora). Con IMPORTANCE_DEFAULT la notificación se
+        // ve normal en la cortina y en la barra, y sigue sin sonar
+        // porque el canal no tiene sonido (setSound(null, null)) y las
+        // actualizaciones no vuelven a avisar (setOnlyAlertOnce). Se
+        // borra primero el canal viejo porque Android no cambia la
+        // importancia de un canal ya creado.
         manager.deleteNotificationChannel(CHANNEL_ID)
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Reproducción de música",
-            NotificationManager.IMPORTANCE_LOW
+            NotificationManager.IMPORTANCE_DEFAULT
         )
         channel.description = "Controles de Shenlong Play Music"
         channel.setSound(null, null)

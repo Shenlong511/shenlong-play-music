@@ -132,6 +132,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -300,16 +301,24 @@ val CardColorOptions: List<Pair<String, Color>> = listOf(
     "Blanco" to Color.White,
     "Claro" to LightBg,
     "Azul" to NeonBlue,
+    "Índigo" to Color(0xFF3F51B5),
+    "Azul marino" to Color(0xFF000080),
     "Celeste" to Color(0xFF4FC3F7),
     "Turquesa" to Color(0xFF00BCD4),
     "Verde" to NeonGreen,
+    "Esmeralda" to Color(0xFF00C853),
     "Lima" to Color(0xFF8BC34A),
+    "Amarillo neón" to Color(0xFFCCFF00),
     "Amarillo" to NeonYellow,
     "Dorado" to Color(0xFFFFD700),
     "Naranja" to NeonOrange,
+    "Coral" to Color(0xFFFF7F50),
     "Rojo" to NeonRed,
+    "Vino" to Color(0xFF800020),
     "Rosa" to NeonPink,
+    "Rosa neón" to Color(0xFFFF2E9A),
     "Fucsia" to Color(0xFFE040FB),
+    "Lavanda" to Color(0xFFB57EDC),
     "Morado" to NeonPurple,
     "Marrón" to Color(0xFF795548),
     "Gris" to Color(0xFF9E9E9E),
@@ -419,6 +428,89 @@ class RotationSettings(private val context: Context) {
 
     suspend fun save(allowed: Boolean) {
         context.dataStore.edit { prefs -> prefs[allowedKey] = allowed }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Último elemento reproducido (DataStore, v2.0): lo que sonaba por última
+// vez (canción o video, con su id, título, artista y la dirección del
+// archivo). Se guarda cada vez que empieza algo y se borra con el STOP
+// de verdad. Sirve para que la carátula no se pierda al cerrar la app
+// por completo: la corrección de la 1.9 (última canción/video en
+// memoria) se pierde cuando Android mata el proceso; con esto guardado,
+// al recrearse el servicio la notificación y el bloqueo vuelven a
+// mostrar el paisaje y el título de lo último que sonó, y el botón de
+// reproducir lo retoma desde el principio.
+// ---------------------------------------------------------------------------
+
+data class LastPlayedItem(
+    val type: String, // "song" o "video"
+    val id: Long,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val uriString: String,
+    val durationMs: Long
+)
+
+class LastPlayedSettings(private val context: Context) {
+    private val typeKey = stringPreferencesKey("last_played_type")
+    private val idKey = longPreferencesKey("last_played_id")
+    private val titleKey = stringPreferencesKey("last_played_title")
+    private val artistKey = stringPreferencesKey("last_played_artist")
+    private val albumKey = stringPreferencesKey("last_played_album")
+    private val uriKey = stringPreferencesKey("last_played_uri")
+    private val durationKey = longPreferencesKey("last_played_duration")
+
+    val lastPlayedFlow: Flow<LastPlayedItem?> =
+        context.dataStore.data.map { prefs ->
+            val type = prefs[typeKey] ?: return@map null
+            val uriString = prefs[uriKey] ?: return@map null
+            LastPlayedItem(
+                type = type,
+                id = prefs[idKey] ?: -1L,
+                title = prefs[titleKey] ?: "",
+                artist = prefs[artistKey] ?: "",
+                album = prefs[albumKey] ?: "",
+                uriString = uriString,
+                durationMs = prefs[durationKey] ?: 0L
+            )
+        }
+
+    suspend fun saveSong(song: Song) {
+        context.dataStore.edit { prefs ->
+            prefs[typeKey] = "song"
+            prefs[idKey] = song.id
+            prefs[titleKey] = song.title
+            prefs[artistKey] = song.artist
+            prefs[albumKey] = song.album
+            prefs[uriKey] = song.uri.toString()
+            prefs[durationKey] = song.durationMs
+        }
+    }
+
+    suspend fun saveVideo(video: VideoItem) {
+        context.dataStore.edit { prefs ->
+            prefs[typeKey] = "video"
+            prefs[idKey] = video.id
+            prefs[titleKey] = video.title
+            prefs[artistKey] = "Video"
+            prefs[albumKey] = ""
+            prefs[uriKey] = video.uri.toString()
+            prefs[durationKey] = video.durationMs
+        }
+    }
+
+    suspend fun clear() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(typeKey)
+            prefs.remove(idKey)
+            prefs.remove(titleKey)
+            prefs.remove(artistKey)
+            prefs.remove(albumKey)
+            prefs.remove(uriKey)
+            prefs.remove(durationKey)
+        }
     }
 }
 
@@ -654,6 +746,11 @@ object PlayerManager {
     private var scope: CoroutineScope? = null
     private var attachedSessionId: Int = C.AUDIO_SESSION_ID_UNSET
 
+    // Contexto de la app (v2.0): se guarda en init() para poder leer y
+    // escribir lo último que sonó en DataStore aunque quien lo pida no
+    // tenga un contexto a mano (al parar, al cambiar de pista...).
+    private var appContext: Context? = null
+
     private val _currentSong = MutableStateFlow<Song?>(null)
     val currentSong: StateFlow<Song?> = _currentSong.asStateFlow()
     private val _isPlaying = MutableStateFlow(false)
@@ -718,6 +815,118 @@ object PlayerManager {
         _currentVideo.value ?: if (_currentSong.value == null) _lastVideo.value else null
 
     /**
+     * Guarda lo último que sonó en DataStore (v2.0): se llama cada vez
+     * que empieza una canción o un video (y al cambiar de pista). Así,
+     * aunque Android mate el proceso al salir por completo de la app,
+     * queda guardado qué sonaba y se puede recuperar al volver.
+     */
+    private fun persistLastPlayed(song: Song?, video: VideoItem?) {
+        val ctx = appContext ?: return
+        val s = scope ?: return
+        s.launch {
+            val store = LastPlayedSettings(ctx)
+            if (song != null) store.saveSong(song)
+            else if (video != null) store.saveVideo(video)
+        }
+    }
+
+    /**
+     * Recupera lo último que sonó de DataStore (v2.0): al recrearse el
+     * servicio (o al volver a la app) después de que el proceso murió,
+     * los flujos en memoria (_lastSong/_lastVideo) están vacíos y la
+     * notificación saldría sin imagen ni título. Aquí se vuelven a
+     * llenar con lo guardado, y además se vuelve a poner el elemento
+     * en el reproductor (en pausa, sin sonar solo) para que la
+     * MediaSession tenga sus metadatos y el bloqueo muestre el paisaje;
+     * el botón de reproducir lo retoma desde el principio. Solo se
+     * restaura si no hay nada en curso: nunca pisa lo que ya suena.
+     * Al terminar se avisa con onRestored para volver a publicar la
+     * notificación ya con la carátula.
+     */
+    fun restoreLastPlayed(context: Context, onRestored: (() -> Unit)? = null) {
+        val ctx = context.applicationContext
+        appContext = ctx
+        val s = scope ?: CoroutineScope(Dispatchers.Main).also { scope = it }
+        s.launch {
+            val saved = try {
+                LastPlayedSettings(ctx).lastPlayedFlow.first()
+            } catch (e: Exception) {
+                null
+            }
+            if (saved != null && saved.uriString.isNotBlank()) {
+                val p = player
+                if (saved.type == "video") {
+                    if (_lastVideo.value == null) {
+                        _lastVideo.value = VideoItem(
+                            id = saved.id,
+                            title = saved.title,
+                            durationMs = saved.durationMs,
+                            uri = Uri.parse(saved.uriString),
+                            width = 0,
+                            height = 0,
+                            folder = ""
+                        )
+                    }
+                    if (p != null && p.mediaItemCount == 0 &&
+                        _currentSong.value == null && _currentVideo.value == null
+                    ) {
+                        val item = MediaItem.Builder()
+                            .setUri(Uri.parse(saved.uriString))
+                            .setMediaId("v0")
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle(saved.title)
+                                    .setArtist("Video")
+                                    .setArtworkData(
+                                        LandscapeArt.artworkBytesForVideo(_lastVideo.value!!),
+                                        MediaMetadata.PICTURE_TYPE_FRONT_COVER
+                                    )
+                                    .build()
+                            )
+                            .build()
+                        p.setMediaItems(listOf(item), 0, 0)
+                        p.prepare()
+                    }
+                } else {
+                    if (_lastSong.value == null) {
+                        _lastSong.value = Song(
+                            id = saved.id,
+                            title = saved.title,
+                            artist = saved.artist,
+                            album = saved.album,
+                            folder = "",
+                            uri = Uri.parse(saved.uriString),
+                            durationMs = saved.durationMs
+                        )
+                    }
+                    if (p != null && p.mediaItemCount == 0 &&
+                        _currentSong.value == null && _currentVideo.value == null
+                    ) {
+                        val item = MediaItem.Builder()
+                            .setUri(Uri.parse(saved.uriString))
+                            .setMediaId("0")
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle(saved.title)
+                                    .setArtist(saved.artist)
+                                    .setAlbumTitle(saved.album)
+                                    .setArtworkData(
+                                        LandscapeArt.artworkBytesForSong(_lastSong.value!!),
+                                        MediaMetadata.PICTURE_TYPE_FRONT_COVER
+                                    )
+                                    .build()
+                            )
+                            .build()
+                        p.setMediaItems(listOf(item), 0, 0)
+                        p.prepare()
+                    }
+                }
+            }
+            onRestored?.invoke()
+        }
+    }
+
+    /**
      * Generación de reproducción (v1.8): sube cada vez que empieza una
      * canción o un video nuevo. Sirve para ignorar un STOP viejo que
      * llegue tarde: el intent de detener del servicio es asíncrono, así
@@ -761,6 +970,11 @@ object PlayerManager {
         // la notificación se quita, así que nada viejo debe reaparecer.
         _lastSong.value = null
         _lastVideo.value = null
+        // (v2.0) También se borra lo último guardado: si no, al volver
+        // a abrir la app reaparecería la carátula de algo ya detenido.
+        appContext?.let { ctx ->
+            scope?.launch { LastPlayedSettings(ctx).clear() }
+        }
         _positionMs.value = 0L
         _durationMs.value = 0L
         _isPlaying.value = false
@@ -802,6 +1016,7 @@ object PlayerManager {
     fun init(context: Context) {
         if (player != null) return
         val appContext = context.applicationContext
+        this.appContext = appContext
         player = ExoPlayer.Builder(appContext).build().apply {
             addListener(object : Player.Listener {
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -829,6 +1044,9 @@ object PlayerManager {
                             currentVideoIndex = idx
                             _currentVideo.value = videoPlaylist[idx]
                             _lastVideo.value = videoPlaylist[idx]
+                            // (v2.0) Al avanzar de video también se guarda
+                            // lo último que sonó, por si se cierra la app.
+                            persistLastPlayed(null, videoPlaylist[idx])
                         }
                     } else {
                         val idx = rawId?.toIntOrNull()
@@ -836,6 +1054,9 @@ object PlayerManager {
                             currentIndex = idx
                             _currentSong.value = playlist[idx]
                             _lastSong.value = playlist[idx]
+                            // (v2.0) Al avanzar de canción también se
+                            // guarda lo último que sonó.
+                            persistLastPlayed(playlist[idx], null)
                         }
                     }
                     _durationMs.value = duration
@@ -913,6 +1134,9 @@ object PlayerManager {
         p.play()
         _currentSong.value = songs[currentIndex]
         _lastSong.value = songs[currentIndex]
+        // (v2.0) Se guarda lo último que sonó, por si se cierra la app
+        // por completo y hay que recuperar la carátula al volver.
+        persistLastPlayed(songs[currentIndex], null)
         MusicService.start(context)
     }
 
@@ -962,6 +1186,9 @@ object PlayerManager {
         p.play()
         _currentVideo.value = allVideos[currentVideoIndex]
         _lastVideo.value = allVideos[currentVideoIndex]
+        // (v2.0) Se guarda lo último que sonó, por si se cierra la app
+        // por completo y hay que recuperar la carátula al volver.
+        persistLastPlayed(null, allVideos[currentVideoIndex])
         MusicService.start(context)
     }
 
@@ -1225,6 +1452,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         PlayerManager.init(this)
+        // (v2.0) Si la app se cerró por completo y había algo sonando,
+        // se recupera lo último guardado para la carátula.
+        PlayerManager.restoreLastPlayed(this)
         // v1.5: Cast quitado — en la 1.4 hacía que la app se cerrara al
         // abrir en el teléfono de Fran, así que la transmisión a TV
         // queda desactivada hasta encontrar una forma segura de ponerla.
@@ -1370,6 +1600,29 @@ fun ShenlongPlayMusicApp() {
     // botón de ajuste en los controles del video.
     var videoResizeMode by remember { mutableStateOf(0) }
     fun cycleVideoResizeMode() { videoResizeMode = (videoResizeMode + 1) % 3 }
+    // Pantalla completa en vertical estilo TikTok (v2.0): los videos
+    // tipo reel, que son verticales, en el reproductor en línea (franja
+    // 16:9) quedaban con bandas negras a los lados o recortados mal al
+    // girar. Ahora el botón de pantalla completa abre el video en
+    // vertical a toda la pantalla, llenándola sin bandas (modo Rellenar
+    // forzado al entrar, como en TikTok), con los controles encima que
+    // se esconden solos a los 3 segundos. Al salir se devuelve el modo
+    // de ajuste que tenía antes. El botón de giro dentro de la pantalla
+    // completa sigue llevando a horizontal.
+    var videoVerticalFullscreen by remember { mutableStateOf(false) }
+    var resizeModeBeforeVerticalFullscreen by remember { mutableStateOf<Int?>(null) }
+    fun enterVideoVerticalFullscreen() {
+        if (!videoVerticalFullscreen) {
+            resizeModeBeforeVerticalFullscreen = videoResizeMode
+            videoResizeMode = 1 // Rellenar: llena la pantalla sin bandas.
+        }
+        videoVerticalFullscreen = true
+    }
+    fun exitVideoVerticalFullscreen() {
+        videoVerticalFullscreen = false
+        resizeModeBeforeVerticalFullscreen?.let { videoResizeMode = it }
+        resizeModeBeforeVerticalFullscreen = null
+    }
     // Carpeta de videos elegida (v1.4): null = lista de carpetas.
     var selectedVideoFolder by remember { mutableStateOf<String?>(null) }
     var showSettingsMenu by remember { mutableStateOf(false) }
@@ -1649,6 +1902,7 @@ fun ShenlongPlayMusicApp() {
     // la canción. Ahora se vuelve a la vista donde estaba (la lista de
     // videos con su carpeta, o las canciones si se abrió desde ahí).
     fun closeVideoScreen() {
+        exitVideoVerticalFullscreen()
         pipVideoScreenOpen = false
         (activity as? MainActivity)?.exitPip()
         playingVideo = null
@@ -1662,7 +1916,9 @@ fun ShenlongPlayMusicApp() {
     // arranca el servicio.
     fun reassertNotificationArtwork() {
         if (PlayerManager.currentSong.value != null ||
-            PlayerManager.currentVideo.value != null
+            PlayerManager.currentVideo.value != null ||
+            PlayerManager.lastSong.value != null ||
+            PlayerManager.lastVideo.value != null
         ) {
             MusicService.start(context)
         }
@@ -1670,6 +1926,7 @@ fun ShenlongPlayMusicApp() {
 
     // Detener el video por completo (v1.4) y volver a la lista de videos.
     fun stopVideoScreen() {
+        exitVideoVerticalFullscreen()
         pipVideoScreenOpen = false
         (activity as? MainActivity)?.exitPip()
         PlayerManager.stopPlayback()
@@ -1687,25 +1944,36 @@ fun ShenlongPlayMusicApp() {
     // pantalla con la imagen ya suelta (negro) mientras sonaba la
     // canción, y sus botones actuaban sobre un video que ya no existía.
     LaunchedEffect(currentVideo) {
-        if (currentVideo == null) playingVideo = null
+        if (currentVideo == null) {
+            playingVideo = null
+            // (v2.0) Si se cerró el video porque empezó una canción, la
+            // pantalla completa vertical también se cierra: si no, el
+            // próximo video se abriría directo a pantalla completa y la
+            // lista quedaría sin barra de estado.
+            exitVideoVerticalFullscreen()
+        }
     }
 
     // Pantalla completa en horizontal (v1.6 video, v1.8 visualizador de
-    // música): modo inmersivo, se ocultan la barra de estado (batería,
-    // señal, hora) y la barra de navegación; al salir (volver a
-    // vertical, cerrar el video o entrar en la ventanita PiP) vuelven a
-    // aparecer. En horizontal siempre hay una pantalla completa (video
-    // o visualizador de música), así que basta con la orientación.
-    val immersiveFullscreen = isLandscape && !isInPip
+    // música) y en vertical para videos estilo TikTok (v2.0): modo
+    // inmersivo, se ocultan la barra de estado (batería, señal, hora) y
+    // la barra de navegación; al salir (volver a vertical, cerrar el
+    // video o entrar en la ventanita PiP) vuelven a aparecer. En
+    // horizontal siempre hay una pantalla completa (video o visualizador
+    // de música), así que basta con la orientación; en vertical la
+    // pantalla completa es solo para el video estilo TikTok, y solo
+    // mientras su pantalla está abierta.
+    val immersiveFullscreen = (isLandscape || (videoVerticalFullscreen && playingVideo != null)) && !isInPip
     LaunchedEffect(immersiveFullscreen) {
         (activity as? MainActivity)?.setImmersiveMode(immersiveFullscreen)
     }
 
-    // Video a pantalla completa (v1.3): SOLO en horizontal. En vertical
-    // el video se ve arriba en tamaño normal, estilo YouTube (v1.4),
-    // con la lista debajo; solo al girar a horizontal (o pulsar
-    // pantalla completa) se expande a toda la pantalla.
-    if (playingVideo != null && isLandscape) {
+    // Video a pantalla completa (v1.3): en horizontal al girar el
+    // teléfono, y en vertical estilo TikTok (v2.0) con el botón de
+    // pantalla completa: el video llena toda la pantalla sin bandas.
+    // En vertical sin pantalla completa el video se ve arriba en tamaño
+    // normal, estilo YouTube (v1.4), con la lista debajo.
+    if (playingVideo != null && (isLandscape || videoVerticalFullscreen)) {
         VideoPlayerScreen(
             isLandscape = isLandscape,
             isInPip = isInPip,
@@ -1765,7 +2033,7 @@ fun ShenlongPlayMusicApp() {
                 onCycleResizeMode = { cycleVideoResizeMode() },
                 onClose = { closeVideoScreen() },
                 onStop = { stopVideoScreen() },
-                onFullscreen = { rotateToLandscape() }
+                onFullscreen = { enterVideoVerticalFullscreen() }
             )
         }
         // La lista ocupa toda la altura restante (weight 1f): el encabezado
@@ -1780,23 +2048,30 @@ fun ShenlongPlayMusicApp() {
             // ---- Encabezado + controles (se esconden al deslizar) ----
             item {
                 Column(modifier = Modifier.padding(12.dp)) {
+                    // Título como imagen (v1.9, grande en v2.0): la imagen
+                    // neón arcoíris que mandó Fran. Antes iba en la misma
+                    // fila que los botones (56 dp de alto, ~120 dp de
+                    // ancho) y en carpetas y en "Sonando ahora" quedaba
+                    // chiquita en la esquina. Ahora tiene su propia fila
+                    // a todo lo ancho, centrada y grande (96 dp de alto,
+                    // ~206 dp de ancho), como el letrero de prueba que
+                    // mandó Fran, en todas las vistas. El PNG trae fondo
+                    // transparente real, así que va directo sobre el
+                    // fondo claro sin caja negra; la opción "Color de
+                    // letras" no la afecta porque no es texto.
+                    Image(
+                        painter = painterResource(R.drawable.title_shenlong_play_music),
+                        contentDescription = "Shenlong Play Music",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(96.dp),
+                        contentScale = ContentScale.Fit
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            // Título como imagen (v1.9): la imagen neón
-                            // arcoíris que mandó Fran. El PNG trae fondo
-                            // transparente real, así que va directo sobre
-                            // el fondo claro sin caja negra; la opción
-                            // "Color de letras" no la afecta porque no es
-                            // texto. Altura 56 dp, proporción original.
-                            Image(
-                                painter = painterResource(R.drawable.title_shenlong_play_music),
-                                contentDescription = "Shenlong Play Music",
-                                modifier = Modifier.height(56.dp),
-                                contentScale = ContentScale.FillHeight
-                            )
                             Text(
                                 text = if (showVideos) {
                                     if (videos.isEmpty()) "Sin videos todavía"
@@ -2871,7 +3146,7 @@ fun ShenlongPlayMusicApp() {
                         Text("Elige un color fijo:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(8.dp))
                         // Fila con desplazamiento horizontal (v1.3): ahora
-                        // hay 17 colores y ninguno se corta; se desliza
+                        // hay 25 colores y ninguno se corta; se desliza
                         // para ver los que siguen (amarillo, morado, negro…).
                         ColorPickerRow(
                             selectedName = cardColorName,
@@ -3860,8 +4135,8 @@ fun VideoInlinePlayer(
                 )
             }
             Text(
-                text = "Gira el teléfono o pulsa pantalla completa para " +
-                    "verlo a lo grande. Al cerrar, el audio sigue en " +
+                text = "Pulsa pantalla completa para verlo a lo grande en " +
+                    "vertical, como en TikTok. Al cerrar, el audio sigue en " +
                     "segundo plano; el botón de stop lo detiene todo.",
                 fontSize = 11.sp,
                 color = Color.LightGray
@@ -3924,10 +4199,12 @@ fun VideoPlayerScreen(
             .clickable { showControls = !showControls }
     ) {
         // Superficie del video con el modo de ajuste elegido (v1.6).
-        // En horizontal ocupa toda la pantalla; con Rellenar se recortan
-        // los bordes y con Original se ve a tamaño real. La barra de
-        // estado y la de navegación están ocultas (modo inmersivo) mientras
-        // esta pantalla está abierta en horizontal.
+        // Ocupa toda la pantalla, en horizontal y en vertical (v2.0,
+        // estilo TikTok: al entrar en vertical se fuerza Rellenar para
+        // que no queden bandas negras); con Rellenar se recortan los
+        // bordes y con Original se ve a tamaño real. La barra de estado
+        // y la de navegación están ocultas (modo inmersivo) mientras
+        // esta pantalla está abierta.
         VideoSurface(
             mode = resizeMode,
             videoWidth = video?.width ?: 0,
@@ -4164,7 +4441,7 @@ fun NowPlayingCard(
 }
 
 // ---------------------------------------------------------------------------
-// Fila de colores con desplazamiento horizontal (v1.3): los 17 colores
+// Fila de colores con desplazamiento horizontal (v1.3): los 25 colores
 // fijos en círculos de 36 dp; se desliza para ver todos sin que ninguno
 // se corte a la derecha. La usan los diálogos de color de tarjetas, de
 // color de fondo y de color de letras (v1.7).
