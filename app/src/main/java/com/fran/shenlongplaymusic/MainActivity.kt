@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -121,10 +122,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -197,19 +194,6 @@ val NeonYellow = Color(0xFFFFC107)
 val NeonPurple = Color(0xFF9C27B0)
 val LightBg = Color(0xFFF7F7FF)
 val NeonColors = listOf(NeonBlue, NeonPink, NeonRed, NeonGreen, NeonOrange, NeonYellow, NeonPurple)
-
-// Título de la app (v1.8): "Shenlong" rosa, "Play" azul y "Music"
-// verde, como en la captura de Fran. Los colores van explícitos por
-// palabra (SpanStyle), así que la opción "Color de letras" (que cambia
-// el LocalContentColor de la vista) NO los afecta: el título siempre
-// conserva sus colores neón originales.
-fun appTitleText(): AnnotatedString = buildAnnotatedString {
-    withStyle(SpanStyle(color = NeonPink)) { append("Shenlong") }
-    append(" ")
-    withStyle(SpanStyle(color = NeonBlue)) { append("Play") }
-    append(" ")
-    withStyle(SpanStyle(color = NeonGreen)) { append("Music") }
-}
 
 // ---------------------------------------------------------------------------
 // Ecualizador: presets (niveles en milibelios, -1500 a +1500, 5 bandas)
@@ -700,6 +684,40 @@ object PlayerManager {
         private set
 
     /**
+     * Última canción/video con carátula (v1.9): se guarda cada vez que
+     * empieza algo y NO se borra al navegar (volver a carpetas, cambiar
+     * de sección, ir a listas...). La carátula de la notificación y del
+     * bloqueo se sacaba solo del elemento actual, que se pone a null en
+     * la ventana de transición al cambiar de canción/video (y al
+     * recrearse el servicio): si la notificación se volvía a publicar
+     * justo en esa ventana, salía sin imagen y nada la reparaba después.
+     * Con este respaldo, la imagen se mantiene siempre mientras suene
+     * algo. Solo se borra con el STOP de verdad, que quita la
+     * notificación de todos modos.
+     */
+    private val _lastSong = MutableStateFlow<Song?>(null)
+    val lastSong: StateFlow<Song?> = _lastSong.asStateFlow()
+    private val _lastVideo = MutableStateFlow<VideoItem?>(null)
+    val lastVideo: StateFlow<VideoItem?> = _lastVideo.asStateFlow()
+
+    /**
+     * Canción para la carátula (v1.9): la actual; si no hay ninguna en
+     * este momento (ventana de transición al cambiar) y tampoco hay un
+     * video actual, la última que sonó. Así el respaldo no pinta la
+     * canción vieja mientras ya suena un video nuevo.
+     */
+    fun artworkSong(): Song? =
+        _currentSong.value ?: if (_currentVideo.value == null) _lastSong.value else null
+
+    /**
+     * Video para la carátula (v1.9): el actual; si no hay ninguno en
+     * este momento (ventana de transición) y tampoco hay una canción
+     * actual, el último que sonó.
+     */
+    fun artworkVideo(): VideoItem? =
+        _currentVideo.value ?: if (_currentSong.value == null) _lastVideo.value else null
+
+    /**
      * Generación de reproducción (v1.8): sube cada vez que empieza una
      * canción o un video nuevo. Sirve para ignorar un STOP viejo que
      * llegue tarde: el intent de detener del servicio es asíncrono, así
@@ -739,6 +757,10 @@ object PlayerManager {
         currentVideoIndex = -1
         _currentSong.value = null
         _currentVideo.value = null
+        // (v1.9) Al parar de verdad también se borra la última carátula:
+        // la notificación se quita, así que nada viejo debe reaparecer.
+        _lastSong.value = null
+        _lastVideo.value = null
         _positionMs.value = 0L
         _durationMs.value = 0L
         _isPlaying.value = false
@@ -806,12 +828,14 @@ object PlayerManager {
                         if (idx != null && idx in videoPlaylist.indices) {
                             currentVideoIndex = idx
                             _currentVideo.value = videoPlaylist[idx]
+                            _lastVideo.value = videoPlaylist[idx]
                         }
                     } else {
                         val idx = rawId?.toIntOrNull()
                         if (idx != null && idx in playlist.indices) {
                             currentIndex = idx
                             _currentSong.value = playlist[idx]
+                            _lastSong.value = playlist[idx]
                         }
                     }
                     _durationMs.value = duration
@@ -888,6 +912,7 @@ object PlayerManager {
         p.prepare()
         p.play()
         _currentSong.value = songs[currentIndex]
+        _lastSong.value = songs[currentIndex]
         MusicService.start(context)
     }
 
@@ -936,6 +961,7 @@ object PlayerManager {
         p.prepare()
         p.play()
         _currentVideo.value = allVideos[currentVideoIndex]
+        _lastVideo.value = allVideos[currentVideoIndex]
         MusicService.start(context)
     }
 
@@ -1628,6 +1654,20 @@ fun ShenlongPlayMusicApp() {
         playingVideo = null
     }
 
+    // (v1.9) Al volver a carpetas se vuelve a publicar la notificación
+    // con la carátula: si en algún cambio de vista se había publicado
+    // sin imagen (ventana de transición), aquí se repara en el momento
+    // en que Fran deja de mirar la lista y pasa a ver la notificación
+    // o el bloqueo. No toca lo que suena: si no hay nada sonando, no
+    // arranca el servicio.
+    fun reassertNotificationArtwork() {
+        if (PlayerManager.currentSong.value != null ||
+            PlayerManager.currentVideo.value != null
+        ) {
+            MusicService.start(context)
+        }
+    }
+
     // Detener el video por completo (v1.4) y volver a la lista de videos.
     fun stopVideoScreen() {
         pipVideoScreenOpen = false
@@ -1745,15 +1785,17 @@ fun ShenlongPlayMusicApp() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            // Título con sus colores neón por palabra
-                            // (v1.8): "Shenlong" rosa, "Play" azul y
-                            // "Music" verde. Los colores van explícitos,
-                            // así que la opción "Color de letras" no los
-                            // cambia.
-                            Text(
-                                text = appTitleText(),
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Bold
+                            // Título como imagen (v1.9): la imagen neón
+                            // arcoíris que mandó Fran. El PNG trae fondo
+                            // transparente real, así que va directo sobre
+                            // el fondo claro sin caja negra; la opción
+                            // "Color de letras" no la afecta porque no es
+                            // texto. Altura 56 dp, proporción original.
+                            Image(
+                                painter = painterResource(R.drawable.title_shenlong_play_music),
+                                contentDescription = "Shenlong Play Music",
+                                modifier = Modifier.height(56.dp),
+                                contentScale = ContentScale.FillHeight
                             )
                             Text(
                                 text = if (showVideos) {
@@ -1797,6 +1839,7 @@ fun ShenlongPlayMusicApp() {
                                         showVideos = false
                                         selectedPlaylist = null
                                         showSettingsMenu = false
+                                        reassertNotificationArtwork()
                                     }
                                 )
                                 DropdownMenuItem(
@@ -2211,7 +2254,10 @@ fun ShenlongPlayMusicApp() {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
-                            onClick = { selectedFolder = null }
+                            onClick = {
+                                selectedFolder = null
+                                reassertNotificationArtwork()
+                            }
                         )
                     }
                 }
@@ -2667,7 +2713,10 @@ fun ShenlongPlayMusicApp() {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
-                            onClick = { selectedVideoFolder = null }
+                            onClick = {
+                                selectedVideoFolder = null
+                                reassertNotificationArtwork()
+                            }
                         )
                     }
                     items(selectedVideoVideos) { video ->

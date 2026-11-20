@@ -124,6 +124,27 @@ la 1.5 porque hacía que la app se cerrara al abrir.)
   música y la de videos, sin entrar a Ajustes. Al cambiar se pausa lo que
   esté sonando.
 
+## Novedades de la 1.9 (título como imagen, icono nuevo, carátula que no se pierde al volver a carpetas)
+
+- Título de la app como imagen: en vez del nombre en texto, el encabezado
+  muestra la imagen neón arcoíris de "Shenlong Play Music" que mandó Fran
+  (fondo transparente, 56 dp de alto). La opción "Color de letras" no la
+  afecta porque no es texto.
+- Icono nuevo de la APK: el escudo de cristal con el dragón, el botón de
+  play y las barras del ecualizador, en todas las densidades y como icono
+  adaptativo (fondo negro). La esquina con la marca de agua de la imagen
+  original se limpió antes de generar los iconos, así que no sale en
+  ningún lado.
+- La carátula (paisaje) ya no se pierde al pulsar "Volver a carpetas" en
+  música o en video: la notificación y la pantalla de bloqueo se sacaban
+  solo del elemento actual, que se pone a null en la ventana de transición
+  al cambiar de canción/video; si la notificación se volvía a publicar
+  justo ahí, salía sin imagen y nada la reparaba. Ahora PlayerManager
+  guarda la última canción/video con carátula y la notificación usa ese
+  respaldo (sin mezclar modos: el paisaje del video viejo no sale mientras
+  suena una canción nueva), y al volver a carpetas la notificación se
+  vuelve a publicar con la carátula.
+
 ## Novedades de la 1.8 (título neón, cambio de sección, carpetas ocultas en Toda la música, visualizador inmersivo, color de carpetas, notificación sin sonido)
 
 - Título de la app con sus colores neón por palabra: "Shenlong" rosa,

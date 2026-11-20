@@ -184,8 +184,12 @@ class MusicService : Service() {
         // y un paisaje como carátula, con los mismos controles: así el
         // audio del video sigue en segundo plano y se puede pausar o
         // seguir desde la barra o la pantalla de bloqueo.
-        val video = PlayerManager.currentVideo.value
-        val song = PlayerManager.currentSong.value
+        // (v1.9) Carátula con respaldo: si el elemento actual está a null
+        // en una ventana de transición (al cambiar de canción/video o al
+        // navegar), se usa el último que sonó, así que la imagen no se
+        // pierde nunca mientras suene algo.
+        val video = PlayerManager.artworkVideo()
+        val song = PlayerManager.artworkSong()
         val isPlaying = PlayerManager.isPlaying.value
         val activityIntent = Intent(this, MainActivity::class.java)
         val contentIntent = PendingIntent.getActivity(
