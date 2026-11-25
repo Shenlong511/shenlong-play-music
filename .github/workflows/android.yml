@@ -25,7 +25,17 @@ jobs:
       - name: Dar permiso al wrapper de Gradle
         run: chmod +x gradlew
 
+      # La llave de firma vive como secreto en GitHub (ANDROID_KEYSTORE_BASE64)
+      # y se reconstruye aquí en cada compilación; nunca se sube al repo.
+      - name: Preparar la llave de firma
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release.keystore
+
       - name: Compilar la APK de prueba (debug)
+        env:
+          KEYSTORE_FILE: ${{ github.workspace }}/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleDebug --stacktrace
 
       - name: Subir la APK como archivo descargable

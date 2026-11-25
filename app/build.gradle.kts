@@ -3,6 +3,23 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Firma propia (keystore de David): si GitHub Actions pasa la llave por
+// variables de entorno, la compilación debug se firma con ella para poder
+// actualizar sin desinstalar. Sin esas variables (compilación local),
+// se usa la llave debug automática.
+// Los nombres no coinciden con las propiedades de SigningConfig:
+// dentro de create("release") { ... }, "keyAlias = keyAlias" se
+// asignaría a sí mismo y la llave quedaría vacía (eso tumbó la
+// ejecución #10 de Biblia SL con 'missing required property "keyPassword"').
+val keystoreFilePath = System.getenv("KEYSTORE_FILE")
+val keystorePass = System.getenv("KEYSTORE_PASSWORD")
+val keyAliasValue = System.getenv("KEY_ALIAS")
+val keyPassValue = System.getenv("KEY_PASSWORD")
+val hasSigningKey = !keystoreFilePath.isNullOrBlank()
+    && !keystorePass.isNullOrBlank()
+    && !keyAliasValue.isNullOrBlank()
+    && !keyPassValue.isNullOrBlank()
+
 android {
     namespace = "com.fran.shenlongplaymusic"
     compileSdk = 34
@@ -11,11 +28,27 @@ android {
         applicationId = "com.fran.shenlongplaymusic"
         minSdk = 24
         targetSdk = 34
-        versionCode = 11
-        versionName = "2.0"
+        versionCode = 12
+        versionName = "2.1"
+    }
+
+    signingConfigs {
+        if (hasSigningKey) {
+            create("release") {
+                storeFile = file(keystoreFilePath!!)
+                storePassword = keystorePass
+                keyAlias = keyAliasValue
+                keyPassword = keyPassValue
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            if (hasSigningKey) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
