@@ -17,18 +17,18 @@ import java.util.Random
  * Android no permite una visualización animada en vivo en la barra de
  * notificaciones ni en la pantalla de bloqueo: ahí solo se muestra una
  * carátula fija junto a los controles. Así que cada canción lleva como
- * carátula uno de estos 20 paisajes distintos, dibujados con Canvas
+ * carátula uno de estos 30 paisajes distintos, dibujados con Canvas
  * (cielo en degradado, sol o luna, montañas en capas, lago con reflejo
  * y siluetas de árboles). El paisaje se ve en la notificación y en la
  * pantalla de bloqueo, y cambia con cada canción.
  *
  * El dibujo es determinista por escena (siempre sale el mismo paisaje
- * para el mismo número) y los 20 bitmaps/PNG se guardan en caché en
+ * para el mismo número) y los 30 bitmaps/PNG se guardan en caché en
  * memoria, así que no se vuelve a dibujar nada al cambiar de canción.
  */
 object LandscapeArt {
 
-    const val COUNT = 20
+    const val COUNT = 30
 
     private const val SUN_NONE = 0
     private const val SUN_SUN = 1
@@ -60,7 +60,7 @@ object LandscapeArt {
         val city: Boolean = false
     )
 
-    // 20 escenas, cada una con paleta propia para que se distingan.
+    // 30 escenas, cada una con paleta propia para que se distingan.
     private val scenes = listOf(
         Scene("Atardecer en el mar", "#FF7E3A", "#FFD166",
             sunColor = "#FFF3B0", sunX = 0.5f, sunY = 0.42f,
@@ -142,7 +142,48 @@ object LandscapeArt {
         Scene("Luna llena sobre el lago", "#101830", "#3A4A7A",
             sunKind = SUN_MOON, sunColor = "#F5F5DC", sunX = 0.5f, sunY = 0.2f,
             stars = true, farColor = "#2A3550", nearColor = "#1A2438",
-            lakeTop = "#2E4A7A", lakeBottom = "#0E1A33")
+            lakeTop = "#2E4A7A", lakeBottom = "#0E1A33"),
+        Scene("Amanecer rosa", "#FFB6D5", "#FFE8F0",
+            sunColor = "#FFF3B0", sunX = 0.5f, sunY = 0.4f,
+            farColor = "#C07A9B", nearColor = "#8A4A6B",
+            lakeTop = "#FF9EBB", lakeBottom = "#8A4A6B"),
+        Scene("Noche de luna azul", "#0A1030", "#1E3A6B",
+            sunKind = SUN_MOON, sunColor = "#BFE3FF", sunX = 0.28f, sunY = 0.18f,
+            stars = true, farColor = "#16224A", nearColor = "#0E1830",
+            lakeTop = "#1E4A7A", lakeBottom = "#0A1428"),
+        Scene("Isla paradisíaca", "#7FE0F2", "#FFF8DC",
+            sunColor = "#FFF8DC", sunX = 0.3f, sunY = 0.18f,
+            farColor = "#4EB3A0", nearColor = "#2E8A7A",
+            lakeTop = "#2ED0C0", lakeBottom = "#0E6A8A",
+            treeColor = "#1E4A2E", trees = true),
+        Scene("Bosque de bambú", "#D8F2B0", "#7AC74F",
+            sunColor = "#FFF8DC", sunX = 0.7f, sunY = 0.16f,
+            farColor = "#5E9B4A", nearColor = "#3A6B2E", lake = false,
+            groundColor = "#2E5E26", treeColor = "#1E3A1A", trees = true),
+        Scene("Montañas moradas", "#B08AD9", "#FFD9EC",
+            sunColor = "#FFF3B0", sunX = 0.68f, sunY = 0.2f,
+            farColor = "#7A5AA8", nearColor = "#4E3A7A",
+            lakeTop = "#C9A8E8", lakeBottom = "#5E4A8A"),
+        Scene("Laguna turquesa", "#8FE8F2", "#E8FFF9",
+            sunColor = "#FFF8DC", sunX = 0.32f, sunY = 0.18f,
+            farColor = "#5EB3C0", nearColor = "#2E7A8A",
+            lakeTop = "#4EE0D8", lakeBottom = "#0E5A6B"),
+        Scene("Atardecer dorado", "#FFC94A", "#FF7B3D",
+            sunColor = "#FFF8DC", sunX = 0.5f, sunY = 0.42f,
+            farColor = "#B06B3A", nearColor = "#7A4A2E",
+            lakeTop = "#FFB35E", lakeBottom = "#7A4A2E"),
+        Scene("Valle verde", "#BFE8FF", "#E8F9E8",
+            sunColor = "#FFF8DC", sunX = 0.3f, sunY = 0.18f,
+            farColor = "#7AB648", nearColor = "#4E8A3A", lake = false,
+            groundColor = "#6BA83E", flowers = true),
+        Scene("Nieve al atardecer", "#FFD9B0", "#FF8A6B",
+            sunColor = "#FFF3B0", sunX = 0.7f, sunY = 0.2f,
+            farColor = "#C08A8A", nearColor = "#8A6A7A", snow = true,
+            lakeTop = "#FFC9A8", lakeBottom = "#8A6A7A"),
+        Scene("Mar de noche", "#050A1E", "#0E2A4A",
+            sunKind = SUN_MOON, sunColor = "#F2F2E8", sunX = 0.72f, sunY = 0.16f,
+            stars = true, farColor = "#12233F", nearColor = "#0A1626",
+            lakeTop = "#16385E", lakeBottom = "#050D1A")
     )
 
     private val bitmapCache = mutableMapOf<Int, Bitmap>()

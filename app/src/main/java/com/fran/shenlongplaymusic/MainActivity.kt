@@ -129,7 +129,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -534,7 +536,23 @@ val VisualizerStyleOptions: List<Pair<String, String>> = listOf(
     "Barras neón" to "28 barras de colores neón, como el reproductor de Windows.",
     "Onda" to "Una línea de onda continua que sigue la música.",
     "Círculo" to "Barras en círculo alrededor del centro.",
-    "Espejo" to "Barras espejo con puntos, arriba y abajo del centro."
+    "Espejo" to "Barras espejo con puntos, arriba y abajo del centro.",
+    "Pulso neón" to "Barras anchas neón con brillo, que laten con la música.",
+    "Anillo aurora" to "Anillo de luz que respira con la música, como una aurora.",
+    "Vinilo neón" to "Disco de vinilo con anillo neón que gira con el ritmo.",
+    "Partículas neón" to "Partículas de colores que brillan y flotan con la música.",
+    "Ecualizador analógico" to "Barras por segmentos, como un ecualizador de estudio.",
+    "Onda doble" to "Dos ondas neón espejo, una arriba y otra abajo.",
+    "Espectro neón" to "Barras neón con la punta brillante, como un espectro.",
+    "Estrellas neón" to "Cielo de estrellas neón que parpadean con la música.",
+    "Fuego neón" to "Barras de fuego: amarillo, naranja y rojo según la fuerza.",
+    "Cascada neón" to "Columnas neón con estela que cae, como una cascada.",
+    "Columnas" to "Columnas blancas finas, sencillas y elegantes.",
+    "Puntos" to "Puntos en fila que crecen y se achican con la música.",
+    "Montañas" to "Silueta de montañas que sube y baja con la música.",
+    "Olas" to "Ola suave que se mueve con la música.",
+    "Espiral" to "Espiral de puntos neón que gira con el ritmo.",
+    "Bloques" to "Cuadrícula de bloques que se encienden con la música."
 )
 
 class VisualizerSettings(private val context: Context) {
@@ -1011,6 +1029,21 @@ object PlayerManager {
     }
 
     /**
+     * Quita la superficie solo si es la actual (v2.3): al cambiar de la
+     * pantalla completa estilo TikTok a la vista normal (o al revés), la
+     * pantalla vieja se destruía y soltaba la superficie aunque la nueva
+     * ya se había enganchado; el video quedaba en negro y no se podía
+     * poner otro hasta detenerlo todo. Ahora la pantalla vieja solo
+     * suelta su propia superficie, nunca la nueva.
+     */
+    fun clearVideoSurfaceIfCurrent(view: SurfaceView?) {
+        if (view != null && lastVideoSurface === view) {
+            lastVideoSurface = null
+            player?.setVideoSurfaceView(null)
+        }
+    }
+
+    /**
      * Reengancha la imagen del video (v1.4): al volver de la ventanita
      * flotante (PiP) a la app, Android puede haber soltado la superficie
      * del SurfaceView; sin volver a engancharla, el video sigue solo con
@@ -1170,7 +1203,7 @@ object PlayerManager {
             // Carátula: un paisaje distinto por canción (LandscapeArt).
             // La MediaSession la muestra en la pantalla de bloqueo; la
             // notificación usa el mismo paisaje como icono grande.
-            // Solo hay 20 paisajes y se guardan en caché, así que no se
+            // Solo hay 30 paisajes y se guardan en caché, así que no se
             // vuelve a dibujar nada aunque la lista tenga muchas canciones.
             MediaItem.Builder().setUri(song.uri).setMediaId(i.toString())
                 .setMediaMetadata(
@@ -2107,6 +2140,43 @@ fun ShenlongPlayMusicApp() {
                 onStop = { stopVideoScreen() },
                 onFullscreen = { enterVideoVerticalFullscreen() }
             )
+        }
+        // Doble atrás para salir (v2.3): como en Biblia SL, solo en la
+        // pantalla principal. La primera vez avisa con un mensaje; la
+        // segunda, antes de 2 segundos, detiene todo (música y video,
+        // se quita la notificación) y cierra la app por completo. En las
+        // demás vistas (búsqueda, carpetas, listas, videos,
+        // ecualizador), atrás vuelve un nivel: no cierra la app. Cuando
+        // hay un video abierto, su propia pantalla maneja el atrás.
+        var lastBackPressMs by remember { mutableStateOf(0L) }
+        BackHandler {
+            when {
+                showSearch -> {
+                    showSearch = false
+                    query = ""
+                }
+                selectedFolder != null -> selectedFolder = null
+                selectedPlaylist != null -> selectedPlaylist = null
+                selectedVideoFolder != null -> selectedVideoFolder = null
+                showFolders || showEq || showPlaylists || showVideos -> {
+                    showFolders = false
+                    showEq = false
+                    showPlaylists = false
+                    showVideos = false
+                }
+                playingVideo != null -> closeVideoScreen()
+                else -> {
+                    val now = System.currentTimeMillis()
+                    if (now - lastBackPressMs < 2000) {
+                        PlayerManager.stopPlayback()
+                        MusicService.stop(context)
+                        activity?.finish()
+                    } else {
+                        lastBackPressMs = now
+                        Toast.makeText(context, "Presiona de nuevo para salir", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
         // La lista ocupa toda la altura restante (weight 1f): el encabezado
         // y los controles van DENTRO de la LazyColumn, así que al bajar se
@@ -3482,7 +3552,7 @@ fun ShenlongPlayMusicApp() {
                 onDismissRequest = { showVizStyleDialog = false },
                 title = { Text("Visualización", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
                 text = {
-                    Column {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                         Text(
                             text = "Elige cómo se ve la música:",
                             fontSize = 14.sp,
@@ -3673,6 +3743,13 @@ fun VisualizerBars(
         }
     }
 
+    // Número casi aleatorio pero fijo por índice (0 a 1): para las
+    // partículas y las estrellas, que no cambien de lugar a cada cuadro.
+    fun pseudo(i: Int, salt: Int): Float {
+        val r = sin(i * 12.9898f + salt * 78.233f) * 43758.5453f
+        return (r % 1f + 1f) % 1f
+    }
+
     val canvasModifier = if (fullscreen) {
         modifier.fillMaxSize().background(Color.Black)
     } else {
@@ -3764,6 +3841,376 @@ fun VisualizerBars(
                         radius = 3.dp.toPx(),
                         center = Offset(x + (barWidth - gap) / 2, midY - halfH)
                     )
+                }
+            }
+            "Pulso neón" -> {
+                // Barras anchas neón con brillo: una barra ancha tenue
+                // detrás y el núcleo sólido delante, que laten.
+                val barWidth = size.width / count
+                val gap = 2.dp.toPx()
+                for (i in 0 until count) {
+                    val level = levelAt(i)
+                    val barHeight = (level * size.height).coerceAtLeast(2.dp.toPx())
+                    val color = NeonColors[i % NeonColors.size]
+                    val x = i * barWidth + gap / 2
+                    drawRoundRect(
+                        color = color.copy(alpha = 0.25f),
+                        topLeft = Offset(x, size.height - barHeight),
+                        size = Size(barWidth - gap, barHeight),
+                        cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
+                    )
+                    val coreW = (barWidth - gap) * 0.45f
+                    drawRoundRect(
+                        color = color,
+                        topLeft = Offset(x + (barWidth - gap - coreW) / 2, size.height - barHeight),
+                        size = Size(coreW, barHeight),
+                        cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx())
+                    )
+                }
+            }
+            "Anillo aurora" -> {
+                // Anillo de luz que respira: arcos de colores alrededor
+                // del centro, más largos y brillantes con la música.
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val baseR = minOf(size.width, size.height) * 0.30f
+                val sweep = 360f / count
+                for (i in 0 until count) {
+                    val level = levelAt(i)
+                    val radius = baseR + level * baseR * 0.45f
+                    val strokeW = 4.dp.toPx() + level * 8.dp.toPx()
+                    drawArc(
+                        color = NeonColors[i % NeonColors.size].copy(alpha = 0.55f + level * 0.45f),
+                        startAngle = i * sweep - 90f,
+                        sweepAngle = sweep * 0.75f,
+                        useCenter = false,
+                        topLeft = Offset(center.x - radius, center.y - radius),
+                        size = Size(radius * 2, radius * 2),
+                        style = Stroke(width = strokeW, cap = StrokeCap.Round)
+                    )
+                }
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.8f),
+                    radius = 4.dp.toPx(),
+                    center = center
+                )
+            }
+            "Vinilo neón" -> {
+                // Disco de vinilo con anillo neón: el anillo late con
+                // la música y cambia de color con la fuerza.
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val discR = minOf(size.width, size.height) * 0.34f
+                val avg = (0 until count).sumOf { levelAt(it).toDouble() }.toFloat() / count
+                drawCircle(color = Color(0xFF1A1A22), radius = discR, center = center)
+                for (g in 1..3) {
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.12f),
+                        radius = discR * g / 4f,
+                        center = center,
+                        style = Stroke(width = 1.dp.toPx())
+                    )
+                }
+                drawCircle(
+                    color = NeonColors[(avg * 7).toInt().coerceIn(0, 6)],
+                    radius = discR * (1.02f + avg * 0.12f),
+                    center = center,
+                    style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
+                )
+                drawCircle(color = NeonPink, radius = discR * 0.28f, center = center)
+                drawCircle(color = Color.White, radius = 2.dp.toPx(), center = center)
+            }
+            "Partículas neón" -> {
+                // Partículas de colores que flotan y brillan con la música.
+                val dots = 42
+                for (k in 0 until dots) {
+                    val px = pseudo(k, 1) * size.width
+                    val py = pseudo(k, 2) * size.height
+                    val level = levelAt(k % count)
+                    val radius = 2.dp.toPx() + level * 7.dp.toPx()
+                    drawCircle(
+                        color = NeonColors[k % NeonColors.size].copy(alpha = 0.35f + level * 0.65f),
+                        radius = radius,
+                        center = Offset(px, py)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = level * 0.5f),
+                        radius = radius * 0.35f,
+                        center = Offset(px, py)
+                    )
+                }
+            }
+            "Ecualizador analógico" -> {
+                // Barras por segmentos, como un ecualizador de estudio:
+                // los segmentos se encienden según la fuerza.
+                val segments = 8
+                val barWidth = size.width / count
+                val gap = 2.dp.toPx()
+                val segH = size.height / segments
+                for (i in 0 until count) {
+                    val level = levelAt(i)
+                    val lit = (level * segments).toInt().coerceIn(0, segments)
+                    val color = NeonColors[i % NeonColors.size]
+                    val x = i * barWidth + gap / 2
+                    for (s in 0 until segments) {
+                        val top = size.height - (s + 1) * segH + 1.dp.toPx()
+                        drawRoundRect(
+                            color = if (s < lit) color else color.copy(alpha = 0.12f),
+                            topLeft = Offset(x, top),
+                            size = Size(barWidth - gap, segH - 2.dp.toPx()),
+                            cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx())
+                        )
+                    }
+                }
+                drawLine(
+                    color = Color.White.copy(alpha = 0.35f),
+                    start = Offset(0f, size.height - 1.dp.toPx()),
+                    end = Offset(size.width, size.height - 1.dp.toPx()),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+            "Onda doble" -> {
+                // Dos ondas neón espejo, una arriba y otra abajo.
+                val midY = size.height / 2f
+                val amp = size.height * 0.42f
+                var prevTop: Offset? = null
+                var prevBottom: Offset? = null
+                for (i in 0 until count) {
+                    val x = if (count > 1) size.width * i / (count - 1) else 0f
+                    val yTop = midY - levelAt(i) * amp
+                    val yBottom = midY + levelAt(i) * amp
+                    val top = Offset(x, yTop)
+                    val bottom = Offset(x, yBottom)
+                    if (prevTop != null && prevBottom != null) {
+                        drawLine(
+                            color = NeonColors[i % NeonColors.size],
+                            start = prevTop,
+                            end = top,
+                            strokeWidth = 4.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                        drawLine(
+                            color = NeonColors[(i + 3) % NeonColors.size].copy(alpha = 0.6f),
+                            start = prevBottom,
+                            end = bottom,
+                            strokeWidth = 4.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                    }
+                    prevTop = top
+                    prevBottom = bottom
+                }
+            }
+            "Espectro neón" -> {
+                // Barras neón con la punta brillante, como un espectro.
+                val barWidth = size.width / count
+                val gap = 2.dp.toPx()
+                for (i in 0 until count) {
+                    val level = levelAt(i)
+                    val barHeight = (level * size.height).coerceAtLeast(2.dp.toPx())
+                    val color = NeonColors[i % NeonColors.size]
+                    val x = i * barWidth + gap / 2
+                    drawRoundRect(
+                        color = color.copy(alpha = 0.85f),
+                        topLeft = Offset(x, size.height - barHeight),
+                        size = Size(barWidth - gap, barHeight),
+                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+                    drawRoundRect(
+                        color = Color.White,
+                        topLeft = Offset(x, size.height - barHeight),
+                        size = Size(barWidth - gap, 4.dp.toPx()),
+                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+                }
+            }
+            "Estrellas neón" -> {
+                // Cielo de estrellas neón que parpadean con la música.
+                val stars = 48
+                for (k in 0 until stars) {
+                    val px = pseudo(k, 3) * size.width
+                    val py = pseudo(k, 4) * size.height
+                    val level = levelAt(k % count)
+                    val twinkle = 0.35f + 0.65f * (0.5f + 0.5f * sin(time * 2f + k * 0.7f))
+                    val radius = 2.dp.toPx() + level * 4.dp.toPx()
+                    drawCircle(
+                        color = NeonColors[k % NeonColors.size].copy(alpha = twinkle),
+                        radius = radius,
+                        center = Offset(px, py)
+                    )
+                }
+            }
+            "Fuego neón" -> {
+                // Barras de fuego: amarillo, naranja y rojo según la fuerza.
+                val hot = listOf(Color(0xFFFFD600), Color(0xFFFF9100), Color(0xFFFF3D00))
+                val barWidth = size.width / count
+                val gap = 2.dp.toPx()
+                for (i in 0 until count) {
+                    val level = levelAt(i)
+                    val barHeight = (level * size.height).coerceAtLeast(2.dp.toPx())
+                    val color = hot[(level * 3).toInt().coerceIn(0, 2)]
+                    val x = i * barWidth + gap / 2
+                    drawRoundRect(
+                        color = color.copy(alpha = 0.3f),
+                        topLeft = Offset(x, size.height - barHeight),
+                        size = Size(barWidth - gap, barHeight),
+                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+                    drawRoundRect(
+                        color = color,
+                        topLeft = Offset(x + (barWidth - gap) * 0.2f, size.height - barHeight),
+                        size = Size((barWidth - gap) * 0.6f, barHeight),
+                        cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    )
+                }
+            }
+            "Cascada neón" -> {
+                // Columnas neón con estela que cae, como una cascada.
+                val barWidth = size.width / count
+                val gap = 2.dp.toPx()
+                for (i in 0 until count) {
+                    val level = levelAt(i)
+                    val color = NeonColors[i % NeonColors.size]
+                    val x = i * barWidth + gap / 2
+                    for (t in 0..2) {
+                        val trailLevel = (level - t * 0.22f).coerceAtLeast(0f)
+                        val h = (trailLevel * size.height * 0.55f).coerceAtLeast(0f)
+                        if (h > 1f) {
+                            drawRoundRect(
+                                color = color.copy(alpha = (0.85f - t * 0.3f).coerceAtLeast(0.05f)),
+                                topLeft = Offset(x, size.height - h - t * 6.dp.toPx()),
+                                size = Size(barWidth - gap, h),
+                                cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                            )
+                        }
+                    }
+                }
+            }
+            "Columnas" -> {
+                // Columnas blancas finas, sencillas y elegantes.
+                val barWidth = size.width / count
+                for (i in 0 until count) {
+                    val level = levelAt(i)
+                    val barHeight = (level * size.height).coerceAtLeast(2.dp.toPx())
+                    val x = i * barWidth + barWidth / 2
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.45f + level * 0.55f),
+                        start = Offset(x, size.height),
+                        end = Offset(x, size.height - barHeight),
+                        strokeWidth = 3.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+            "Puntos" -> {
+                // Puntos en fila que crecen y se achican con la música.
+                val midY = size.height / 2f
+                val step = size.width / count
+                for (i in 0 until count) {
+                    val level = levelAt(i)
+                    drawCircle(
+                        color = NeonColors[i % NeonColors.size],
+                        radius = 2.dp.toPx() + level * 9.dp.toPx(),
+                        center = Offset(i * step + step / 2, midY)
+                    )
+                }
+            }
+            "Montañas" -> {
+                // Silueta de montañas que sube y baja con la música: una
+                // cordillera tenue detrás y la principal delante.
+                val back = Path()
+                back.moveTo(0f, size.height)
+                for (i in 0 until count) {
+                    val x = size.width * i / (count - 1)
+                    val y = size.height - levelAt(count - 1 - i) * size.height * 0.55f
+                    back.lineTo(x, y)
+                }
+                back.lineTo(size.width, size.height)
+                back.close()
+                drawPath(path = back, color = NeonBlue.copy(alpha = 0.45f))
+                val path = Path()
+                path.moveTo(0f, size.height)
+                for (i in 0 until count) {
+                    val x = size.width * i / (count - 1)
+                    val y = size.height - levelAt(i) * size.height * 0.85f
+                    path.lineTo(x, y)
+                }
+                path.lineTo(size.width, size.height)
+                path.close()
+                drawPath(path = path, color = NeonPurple.copy(alpha = 0.85f))
+            }
+            "Olas" -> {
+                // Ola suave que se mueve con la música, con su cresta
+                // brillante en verde neón.
+                val midY = size.height * 0.55f
+                val amp = size.height * 0.4f
+                val path = Path()
+                path.moveTo(0f, size.height)
+                path.lineTo(0f, midY - levelAt(0) * amp)
+                for (i in 1 until count) {
+                    val x = size.width * i / (count - 1)
+                    val y = midY - levelAt(i) * amp
+                    path.lineTo(x, y)
+                }
+                path.lineTo(size.width, size.height)
+                path.close()
+                drawPath(path = path, color = NeonBlue.copy(alpha = 0.7f))
+                var prev: Offset? = null
+                for (i in 0 until count) {
+                    val x = size.width * i / (count - 1)
+                    val top = Offset(x, midY - levelAt(i) * amp)
+                    if (prev != null) {
+                        drawLine(
+                            color = NeonGreen,
+                            start = prev,
+                            end = top,
+                            strokeWidth = 3.dp.toPx(),
+                            cap = StrokeCap.Round
+                        )
+                    }
+                    prev = top
+                }
+            }
+            "Espiral" -> {
+                // Espiral de puntos neón que gira con el ritmo.
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val maxR = minOf(size.width, size.height) * 0.46f
+                val turns = 3
+                val dots = 72
+                for (k in 0 until dots) {
+                    val frac = k.toFloat() / dots
+                    val angle = frac * turns * 2 * PI.toFloat() + time * 0.5f
+                    val level = levelAt(k % count)
+                    val r = maxR * frac * (0.55f + level * 0.6f)
+                    val pos = center + Offset(cos(angle), sin(angle)) * r
+                    drawCircle(
+                        color = NeonColors[k % NeonColors.size].copy(alpha = 0.4f + level * 0.6f),
+                        radius = 2.dp.toPx() + level * 4.dp.toPx(),
+                        center = pos
+                    )
+                }
+            }
+            "Bloques" -> {
+                // Cuadrícula de bloques que se encienden con la música:
+                // la fila de abajo se enciende fácil y la de arriba solo
+                // con los golpes fuertes.
+                val cols = 7
+                val rows = 4
+                val cellW = size.width / cols
+                val cellH = size.height / rows
+                val gap = 3.dp.toPx()
+                for (r in 0 until rows) {
+                    for (c in 0 until cols) {
+                        val idx = (r * cols + c) % count
+                        val level = levelAt(idx)
+                        val need = 0.75f - r * 0.22f
+                        val lit = level > need
+                        drawRoundRect(
+                            color = if (lit) NeonColors[idx % NeonColors.size]
+                            else Color.White.copy(alpha = 0.08f),
+                            topLeft = Offset(c * cellW + gap, r * cellH + gap),
+                            size = Size(cellW - gap * 2, cellH - gap * 2),
+                            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                        )
+                    }
                 }
             }
             else -> {
@@ -4093,6 +4540,14 @@ fun VideoSurface(
     val aspect = if (videoWidth > 0 && videoHeight > 0) {
         videoWidth.toFloat() / videoHeight
     } else 16f / 9f
+    // Superficie actual de ESTA pantalla (v2.3): se guarda para soltarla
+    // al salir solo si sigue siendo la actual (ver
+    // clearVideoSurfaceIfCurrent). Antes cada pantalla soltaba la
+    // superficie al destruirse sin mirar si otra ya se había enganchado.
+    val surfaceHolder = remember { object { var view: SurfaceView? = null } }
+    DisposableEffect(Unit) {
+        onDispose { surfaceHolder.view?.let { PlayerManager.clearVideoSurfaceIfCurrent(it) } }
+    }
     BoxWithConstraints(
         modifier = modifier.clipToBounds(),
         contentAlignment = Alignment.Center
@@ -4128,6 +4583,7 @@ fun VideoSurface(
                 SurfaceView(ctx).apply {
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) {
+                            surfaceHolder.view = this@apply
                             PlayerManager.setVideoSurface(this@apply)
                         }
 
@@ -4143,7 +4599,10 @@ fun VideoSurface(
                     })
                 }
             },
-            update = { view -> PlayerManager.setVideoSurface(view) },
+            update = { view ->
+                surfaceHolder.view = view
+                PlayerManager.setVideoSurface(view)
+            },
             modifier = surfaceModifier
         )
     }
@@ -4176,8 +4635,12 @@ fun VideoInlinePlayer(
     LaunchedEffect(isInPip) {
         if (!isInPip) PlayerManager.reattachVideoSurface()
     }
-    DisposableEffect(Unit) {
-        onDispose { PlayerManager.setVideoSurface(null) }
+    // Al cambiar de video (v2.3): se vuelve a enganchar la superficie,
+    // por si dos videos seguidos tienen el mismo tamaño y la vista no se
+    // redibuja sola. La superficie se suelta en VideoSurface, solo si
+    // sigue siendo la actual.
+    LaunchedEffect(video) {
+        if (video != null) PlayerManager.reattachVideoSurface()
     }
     Column(
         modifier = Modifier
@@ -4349,9 +4812,14 @@ fun VideoPlayerScreen(
         }
     }
     // Al salir de la pantalla se suelta la superficie (se quita la
-    // imagen) pero el reproductor NO se detiene: el audio sigue.
-    DisposableEffect(Unit) {
-        onDispose { PlayerManager.setVideoSurface(null) }
+    // imagen) pero el reproductor NO se detiene: el audio sigue. La
+    // superficie se suelta en VideoSurface, solo si sigue siendo la
+    // actual (v2.3).
+    // Al cambiar de video (v2.3): se vuelve a enganchar la superficie,
+    // por si dos videos seguidos tienen el mismo tamaño y la vista no se
+    // redibuja sola.
+    LaunchedEffect(video) {
+        if (video != null) PlayerManager.reattachVideoSurface()
     }
     // Al volver de la ventanita PiP (v1.4): se vuelve a enganchar la
     // imagen, que si no solo sonaría el audio.
