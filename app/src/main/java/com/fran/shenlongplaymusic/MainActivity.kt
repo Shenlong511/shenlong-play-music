@@ -1150,6 +1150,16 @@ object PlayerManager {
                         }
                     }
                     _durationMs.value = duration
+                    // (v2.4) Al cambiar de canción o video se vuelve a
+                    // publicar la notificación con la carátula nueva:
+                    // el servicio también la actualiza con su propio
+                    // listener, pero si el servicio se creó antes que la
+                    // actividad, su listener corría antes de que se
+                    // actualizara la canción actual y la imagen quedaba
+                    // trabada en la anterior. Aquí la canción ya está
+                    // actualizada, así que la notificación sale con el
+                    // paisaje que toca, en la barra y en el bloqueo.
+                    MusicService.start(appContext)
                 }
             })
         }
@@ -1684,14 +1694,19 @@ fun ShenlongPlayMusicApp() {
     // PiP? Solo en ese caso se vuelve a abrir al salir de PiP (v1.4):
     // si el usuario cerró el video a propósito, no se reabre.
     var pipVideoScreenOpen by remember { mutableStateOf(false) }
-    // Modo de ajuste del video (v1.6): 0 = Normal (se ve completo sin
-    // recortar), 1 = Rellenar (llena la pantalla aunque recorte un
-    // poco), 2 = Original (tamaño real del video). Se cambia con el
-    // botón de ajuste en los controles del video. Cada video abre en
-    // Normal (v2.2): al cambiar de video se vuelve al modo Normal, en
-    // vertical y en horizontal.
+    // Modo de ajuste del video (v1.6, 6 modos en v2.4): 0 = Normal (se
+    // ve completo sin recortar), 1 = Rellenar (llena la pantalla aunque
+    // recorte un poco), 2 = Original (tamaño real del video), 3 = Ancho
+    // completo (el ancho llena la pantalla, se recorta arriba y abajo
+    // si hace falta), 4 = Alto completo (el alto llena la pantalla, se
+    // recorta a los lados si hace falta), 5 = Estirar (llena la
+    // pantalla estirando el video, sin respetar su proporción). Se
+    // cambia con el botón de ajuste en los controles del video. Cada
+    // video abre en Normal (v2.2): al cambiar de video se vuelve al
+    // modo Normal, en vertical y en horizontal, en estilo YouTube y en
+    // estilo TikTok.
     var videoResizeMode by remember { mutableStateOf(0) }
-    fun cycleVideoResizeMode() { videoResizeMode = (videoResizeMode + 1) % 3 }
+    fun cycleVideoResizeMode() { videoResizeMode = (videoResizeMode + 1) % 6 }
     // Pantalla completa en vertical estilo TikTok (v2.0): los videos
     // tipo reel, que son verticales, en el reproductor en línea (franja
     // 16:9) quedaban con bandas negras a los lados o recortados mal al
@@ -1932,6 +1947,14 @@ fun ShenlongPlayMusicApp() {
         if (!hasPermission || !hasVideoPermission || !hasNotifPermission) {
             permissionLauncher.launch(permissionsToRequest())
         }
+    }
+
+    // Precalentar los paisajes (v2.4): se dibujan los 30 paisajes en
+    // segundo plano al abrir la app, para que al pulsar una canción o
+    // un video la carátula ya esté en caché y no se trabe la música al
+    // cambiar de lista.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.Default) { LandscapeArt.warmUp() }
     }
 
     LaunchedEffect(hasPermission) {
@@ -2192,21 +2215,19 @@ fun ShenlongPlayMusicApp() {
                 Column(modifier = Modifier.padding(12.dp)) {
                     // Título como imagen (v1.9, grande en v2.0 y más grande
                     // en v2.2): la imagen neón arcoíris que mandó Fran. Con
-                    // altura fija de 96 dp quedaba chica (unos 206 dp de
-                    // ancho) y sobraba mucho espacio a los lados. Ahora la
-                    // altura sale de la proporción de la imagen (1080x502)
-                    // a todo lo ancho, así la imagen llena la barra y la
-                    // barra se ajusta a la imagen, en todas las vistas.
-                    // El PNG trae fondo transparente real, así que va
-                    // directo sobre el fondo claro sin caja negra; la
-                    // opción "Color de letras" no la afecta porque no es
-                    // texto.
+                    // (v2.4) La imagen se recortó a su contenido visible
+                    // (1080x181): el PNG original de 1080x502 traía el
+                    // texto centrado con mucho espacio transparente
+                    // arriba y abajo, y al mostrarlo a todo lo ancho
+                    // quedaba un hueco blanco enorme entre el título y
+                    // los botones. Ahora la altura sale de la proporción
+                    // recortada y la barra se ajusta a la imagen.
                     Image(
                         painter = painterResource(R.drawable.title_shenlong_play_music),
                         contentDescription = "Shenlong Play Music",
                         modifier = Modifier
                             .fillMaxWidth()
-                            .aspectRatio(1080f / 502f),
+                            .aspectRatio(1080f / 181f),
                         contentScale = ContentScale.FillWidth
                     )
                     Row(
@@ -2248,22 +2269,22 @@ fun ShenlongPlayMusicApp() {
                                     }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text("Buscar", fontSize = 14.sp) },
+                                    onClick = {
+                                        showVideos = false; showFolders = false; showEq = false
+                                        showPlaylists = false
+                                        selectedFolder = null; selectedPlaylist = null
+                                        showSearch = true
+                                        showSettingsMenu = false
+                                    }
+                                )
+                                DropdownMenuItem(
                                     text = { Text("Todas las canciones", fontSize = 14.sp) },
                                     onClick = {
                                         showFolders = false; showEq = false; showPlaylists = false
                                         showVideos = false
                                         selectedFolder = null; selectedPlaylist = null
                                         showSettingsMenu = false
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Carpetas", fontSize = 14.sp) },
-                                    onClick = {
-                                        showFolders = true; showEq = false; showPlaylists = false
-                                        showVideos = false
-                                        selectedPlaylist = null
-                                        showSettingsMenu = false
-                                        reassertNotificationArtwork()
                                     }
                                 )
                                 DropdownMenuItem(
@@ -2361,19 +2382,28 @@ fun ShenlongPlayMusicApp() {
                             }
                         }
                         Spacer(modifier = Modifier.width(6.dp))
-                        // Lupa: icono vectorial real (Icons.Default.Search),
-                        // botón de icono compacto de tamaño fijo: 48 dp en
-                        // total, icono de 24 dp dentro, sin estirar. Al
-                        // pulsarla se expande la barra de búsqueda; al
-                        // cerrarla vuelve a quedar solo la lupa.
+                        // Carpetas (v2.4): icono en la barra principal en
+                        // lugar de la lupa (la búsqueda ahora vive solo
+                        // en Ajustes). En música abre/cierra la lista de
+                        // carpetas; en videos vuelve a la lista de
+                        // carpetas de videos. Al abrir carpetas se vuelve
+                        // a publicar la notificación con su carátula.
                         TransportIconButton(
-                            icon = Icons.Default.Search,
-                            description = "Buscar",
-                            color = NeonBlue,
-                            selected = showSearch,
+                            icon = Icons.Default.Folder,
+                            description = "Carpetas",
+                            color = NeonGreen,
+                            selected = if (showVideos) selectedVideoFolder == null else showFolders,
                             onClick = {
-                                showSearch = !showSearch
-                                if (!showSearch) query = ""
+                                if (showVideos) {
+                                    selectedVideoFolder = null
+                                } else if (showFolders) {
+                                    showFolders = false
+                                } else {
+                                    showFolders = true; showEq = false; showPlaylists = false
+                                    showVideos = false
+                                    selectedPlaylist = null
+                                    reassertNotificationArtwork()
+                                }
                             }
                         )
                         // Giro de pantalla: en vertical gira a horizontal
@@ -4438,20 +4468,28 @@ fun VideoThumbnail(video: VideoItem) {
 }
 
 // ---------------------------------------------------------------------------
-// Modos de ajuste del video (v1.6, "Normal" en v2.2): 0 = Normal (se ve
-// completo sin recortar, con bandas negras si hace falta: es el primer
-// ajuste al abrir un video), 1 = Rellenar (llena toda la pantalla aunque
-// recorte los bordes), 2 = Original (tamaño real del video en píxeles,
-// centrado; si es más grande que la pantalla se recorta). Equivale a los
-// modos RESIZE_MODE_FIT / FILL / ZOOM de PlayerView, pero aquí el video
-// se dibuja en un SurfaceView y el tamaño se calcula a mano: para
-// Rellenar la superficie se hace más grande que su contenedor y el
-// contenedor la recorta (clipToBounds).
+// Modos de ajuste del video (v1.6, "Normal" en v2.2, 6 modos en v2.4):
+// 0 = Normal (se ve completo sin recortar, con bandas negras si hace
+// falta: es el primer ajuste al abrir un video), 1 = Rellenar (llena
+// toda la pantalla aunque recorte los bordes), 2 = Original (tamaño
+// real del video en píxeles, centrado; si es más grande que la pantalla
+// se recorta), 3 = Ancho completo (el ancho llena la pantalla; si el
+// video es más alto se recorta arriba y abajo), 4 = Alto completo (el
+// alto llena la pantalla; si el video es más ancho se recorta a los
+// lados), 5 = Estirar (llena la pantalla estirando el video, sin
+// respetar su proporción). Equivale a los modos RESIZE_MODE_FIT / FILL
+// / ZOOM de PlayerView, pero aquí el video se dibuja en un SurfaceView
+// y el tamaño se calcula a mano: para Rellenar, Ancho y Alto la
+// superficie se hace más grande que su contenedor y el contenedor la
+// recorta (clipToBounds).
 // ---------------------------------------------------------------------------
 
 fun videoResizeModeName(mode: Int): String = when (mode) {
     1 -> "Rellenar"
     2 -> "Original"
+    3 -> "Ancho completo"
+    4 -> "Alto completo"
+    5 -> "Estirar"
     else -> "Normal"
 }
 
@@ -4571,6 +4609,21 @@ fun VideoSurface(
                 val widthDp = with(density) { videoWidth.toDp() }
                 val heightDp = with(density) { videoHeight.toDp() }
                 Modifier.size(widthDp, heightDp)
+            }
+            3 -> {
+                // Ancho completo: el ancho llena el contenedor; si el
+                // video es más alto, se recorta arriba y abajo.
+                Modifier.size(boxWidth, boxWidth / aspect)
+            }
+            4 -> {
+                // Alto completo: el alto llena el contenedor; si el
+                // video es más ancho, se recorta a los lados.
+                Modifier.size(boxHeight * aspect, boxHeight)
+            }
+            5 -> {
+                // Estirar: llena el contenedor estirando el video, sin
+                // respetar su proporción.
+                Modifier.fillMaxSize()
             }
             else -> {
                 // Normal: el rectángulo más grande de la proporción del

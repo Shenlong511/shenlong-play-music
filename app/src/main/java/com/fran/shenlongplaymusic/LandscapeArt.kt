@@ -189,6 +189,18 @@ object LandscapeArt {
     private val bitmapCache = mutableMapOf<Int, Bitmap>()
     private val bytesCache = mutableMapOf<Int, ByteArray>()
 
+    /** Precalienta los paisajes en segundo plano (v2.4): dibuja los
+     * 30 paisajes y guarda sus PNG en caché. Al abrir la app se llama
+     * desde un hilo en segundo plano; así, al pulsar una canción o un
+     * video, la carátula ya está lista y la música no se traba al
+     * cambiar de lista (antes se dibujaban y comprimían en el hilo
+     * principal al pulsar, hasta 30 paisajes la primera vez). */
+    fun warmUp() {
+        for (i in 0 until COUNT) {
+            artworkBytes(i)
+        }
+    }
+
     /** Nombre del paisaje, para depurar o mostrarlo en la app. */
     fun name(index: Int): String = scenes[((index % COUNT) + COUNT) % COUNT].name
 
