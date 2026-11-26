@@ -2,6 +2,7 @@ package com.fran.shenlongplaymusic
 
 import android.Manifest
 import android.graphics.Bitmap
+import android.widget.Toast
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.content.ContentUris
@@ -36,6 +37,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -87,8 +89,11 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -110,11 +115,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -139,6 +148,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CoroutineScope
@@ -1035,6 +1045,53 @@ object PlayerManager {
                     }
                 }
 
+                // Si un archivo no se puede reproducir (se borró, se movió
+                // o se dañó), el reproductor se quedaba en error y no sonaba
+                // nada hasta que se elegía otra canción o video a mano.
+                // Ahora se salta solo al siguiente de la lista (canción o
+                // video) y avisa con un mensaje; si era el último, se detiene.
+                override fun onPlayerError(error: PlaybackException) {
+                    val p = player ?: return
+                    val ctx = appContext
+                    if (ctx != null) {
+                        Toast.makeText(
+                            ctx,
+                            "No se pudo reproducir este archivo, se pasó al siguiente",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    if (_currentVideo.value != null) {
+                        if (currentVideoIndex < videoPlaylist.size - 1) {
+                            p.seekToNextMediaItem()
+                            p.prepare()
+                            p.play()
+                        } else {
+                            p.stop()
+                        }
+                        return
+                    }
+                    if (playlist.isEmpty()) {
+                        p.stop()
+                        return
+                    }
+                    if (_shuffle.value) {
+                        val nextIdx = (playlist.indices - currentIndex).randomOrNull()
+                        if (nextIdx != null) {
+                            p.seekTo(nextIdx, 0)
+                            p.prepare()
+                            p.play()
+                        } else {
+                            p.stop()
+                        }
+                    } else if (currentIndex < playlist.size - 1) {
+                        p.seekToNextMediaItem()
+                        p.prepare()
+                        p.play()
+                    } else {
+                        p.stop()
+                    }
+                }
+
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                     val rawId = mediaItem?.mediaId
                     if (rawId != null && rawId.startsWith("v")) {
@@ -1594,10 +1651,12 @@ fun ShenlongPlayMusicApp() {
     // PiP? Solo en ese caso se vuelve a abrir al salir de PiP (v1.4):
     // si el usuario cerró el video a propósito, no se reabre.
     var pipVideoScreenOpen by remember { mutableStateOf(false) }
-    // Modo de ajuste del video (v1.6): 0 = Ajustar (se ve completo sin
+    // Modo de ajuste del video (v1.6): 0 = Normal (se ve completo sin
     // recortar), 1 = Rellenar (llena la pantalla aunque recorte un
     // poco), 2 = Original (tamaño real del video). Se cambia con el
-    // botón de ajuste en los controles del video.
+    // botón de ajuste en los controles del video. Cada video abre en
+    // Normal (v2.2): al cambiar de video se vuelve al modo Normal, en
+    // vertical y en horizontal.
     var videoResizeMode by remember { mutableStateOf(0) }
     fun cycleVideoResizeMode() { videoResizeMode = (videoResizeMode + 1) % 3 }
     // Pantalla completa en vertical estilo TikTok (v2.0): los videos
@@ -1626,6 +1685,9 @@ fun ShenlongPlayMusicApp() {
     // Carpeta de videos elegida (v1.4): null = lista de carpetas.
     var selectedVideoFolder by remember { mutableStateOf<String?>(null) }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    // Donación (v2.2): solo en Ajustes, como en Biblia SL, con la imagen
+    // de la Cuenta Nu y los botones para copiar las cuentas.
+    var showDonation by remember { mutableStateOf(false) }
     var selectedPlaylist by remember { mutableStateOf<String?>(null) }
     var showHiddenFolders by remember { mutableStateOf(false) }
     var addToPlaylistSong by remember { mutableStateOf<Song?>(null) }
@@ -1943,6 +2005,9 @@ fun ShenlongPlayMusicApp() {
     // nada), se cierra sola. Si no, el reproductor de video quedaba en
     // pantalla con la imagen ya suelta (negro) mientras sonaba la
     // canción, y sus botones actuaban sobre un video que ya no existía.
+    // Al empezar un video (v2.2): el ajuste vuelve a Normal, en vertical
+    // y en horizontal; si se está en la pantalla completa vertical
+    // estilo TikTok no se toca, para que siga llenando la pantalla.
     LaunchedEffect(currentVideo) {
         if (currentVideo == null) {
             playingVideo = null
@@ -1951,6 +2016,8 @@ fun ShenlongPlayMusicApp() {
             // próximo video se abriría directo a pantalla completa y la
             // lista quedaría sin barra de estado.
             exitVideoVerticalFullscreen()
+        } else if (!videoVerticalFullscreen) {
+            videoResizeMode = 0
         }
     }
 
@@ -1979,7 +2046,12 @@ fun ShenlongPlayMusicApp() {
             isInPip = isInPip,
             resizeMode = videoResizeMode,
             onCycleResizeMode = { cycleVideoResizeMode() },
-            onClose = { closeVideoScreen() },
+            // En la pantalla completa vertical estilo TikTok (v2.2), la X
+            // y el botón de atrás del teléfono vuelven a la vista normal
+            // estilo YouTube (el video en su franja con la lista debajo),
+            // no cierran el video. En horizontal la X sigue cerrando el
+            // video como antes, porque ahí no hay vista normal a la que volver.
+            onClose = { if (!isLandscape && videoVerticalFullscreen) exitVideoVerticalFullscreen() else closeVideoScreen() },
             onStop = { stopVideoScreen() },
             onRotate = { if (isLandscape) rotateToPortrait() else rotateToLandscape() }
         )
@@ -2048,24 +2120,24 @@ fun ShenlongPlayMusicApp() {
             // ---- Encabezado + controles (se esconden al deslizar) ----
             item {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    // Título como imagen (v1.9, grande en v2.0): la imagen
-                    // neón arcoíris que mandó Fran. Antes iba en la misma
-                    // fila que los botones (56 dp de alto, ~120 dp de
-                    // ancho) y en carpetas y en "Sonando ahora" quedaba
-                    // chiquita en la esquina. Ahora tiene su propia fila
-                    // a todo lo ancho, centrada y grande (96 dp de alto,
-                    // ~206 dp de ancho), como el letrero de prueba que
-                    // mandó Fran, en todas las vistas. El PNG trae fondo
-                    // transparente real, así que va directo sobre el
-                    // fondo claro sin caja negra; la opción "Color de
-                    // letras" no la afecta porque no es texto.
+                    // Título como imagen (v1.9, grande en v2.0 y más grande
+                    // en v2.2): la imagen neón arcoíris que mandó Fran. Con
+                    // altura fija de 96 dp quedaba chica (unos 206 dp de
+                    // ancho) y sobraba mucho espacio a los lados. Ahora la
+                    // altura sale de la proporción de la imagen (1080x502)
+                    // a todo lo ancho, así la imagen llena la barra y la
+                    // barra se ajusta a la imagen, en todas las vistas.
+                    // El PNG trae fondo transparente real, así que va
+                    // directo sobre el fondo claro sin caja negra; la
+                    // opción "Color de letras" no la afecta porque no es
+                    // texto.
                     Image(
                         painter = painterResource(R.drawable.title_shenlong_play_music),
                         contentDescription = "Shenlong Play Music",
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(96.dp),
-                        contentScale = ContentScale.Fit
+                            .aspectRatio(1080f / 502f),
+                        contentScale = ContentScale.FillWidth
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -2098,6 +2170,13 @@ fun ShenlongPlayMusicApp() {
                                 expanded = showSettingsMenu,
                                 onDismissRequest = { showSettingsMenu = false }
                             ) {
+                                DropdownMenuItem(
+                                    text = { Text("Donación", fontSize = 14.sp) },
+                                    onClick = {
+                                        showDonation = true
+                                        showSettingsMenu = false
+                                    }
+                                )
                                 DropdownMenuItem(
                                     text = { Text("Todas las canciones", fontSize = 14.sp) },
                                     onClick = {
@@ -2764,8 +2843,12 @@ fun ShenlongPlayMusicApp() {
                                 )
                                 Text(text = song.artist, fontSize = 12.sp, color = Color.DarkGray)
                             }
+                            // Quitar UNA canción de la lista (v2.2): antes
+                            // era una X chiquita y no se veía; ahora es el
+                            // bote de basura, bien visible. La lista completa
+                            // se sigue borrando con "Borrar lista" de arriba.
                             ActionIconButton(
-                                icon = Icons.Default.Close,
+                                icon = Icons.Default.Delete,
                                 description = "Quitar de la lista",
                                 color = NeonRed,
                                 onClick = {
@@ -3137,6 +3220,10 @@ fun ShenlongPlayMusicApp() {
         }
 
         // ---- Diálogo de color de tarjetas: color fijo + transparencia ----
+        if (showDonation) {
+            DonationDialog(onClose = { showDonation = false })
+        }
+
         if (showCardColorDialog) {
             AlertDialog(
                 onDismissRequest = { showCardColorDialog = false },
@@ -3904,20 +3991,96 @@ fun VideoThumbnail(video: VideoItem) {
 }
 
 // ---------------------------------------------------------------------------
-// Modos de ajuste del video (v1.6): 0 = Ajustar (se ve completo sin
-// recortar, con bandas negras si hace falta), 1 = Rellenar (llena toda
-// la pantalla aunque recorte los bordes), 2 = Original (tamaño real del
-// video en píxeles, centrado; si es más grande que la pantalla se
-// recorta). Equivale a los modos RESIZE_MODE_FIT / FILL / ZOOM de
-// PlayerView, pero aquí el video se dibuja en un SurfaceView y el
-// tamaño se calcula a mano: para Rellenar la superficie se hace más
-// grande que su contenedor y el contenedor la recorta (clipToBounds).
+// Modos de ajuste del video (v1.6, "Normal" en v2.2): 0 = Normal (se ve
+// completo sin recortar, con bandas negras si hace falta: es el primer
+// ajuste al abrir un video), 1 = Rellenar (llena toda la pantalla aunque
+// recorte los bordes), 2 = Original (tamaño real del video en píxeles,
+// centrado; si es más grande que la pantalla se recorta). Equivale a los
+// modos RESIZE_MODE_FIT / FILL / ZOOM de PlayerView, pero aquí el video
+// se dibuja en un SurfaceView y el tamaño se calcula a mano: para
+// Rellenar la superficie se hace más grande que su contenedor y el
+// contenedor la recorta (clipToBounds).
 // ---------------------------------------------------------------------------
 
 fun videoResizeModeName(mode: Int): String = when (mode) {
     1 -> "Rellenar"
     2 -> "Original"
-    else -> "Ajustar"
+    else -> "Normal"
+}
+
+// ---------------------------------------------------------------------------
+// Donación (v2.2): igual que en Biblia SL, solo desde Ajustes. Ventana a
+// pantalla completa con la imagen de la Cuenta Nu de Débito y botones
+// para copiar la cuenta, la CLABE o las dos (copian sin espacios).
+// ---------------------------------------------------------------------------
+
+@Composable
+fun DonationDialog(onClose: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onClose) { Text("✕ Cerrar") }
+            }
+            Image(
+                painter = painterResource(id = R.drawable.donacion),
+                contentDescription = "Donación a la Cuenta Nu de Débito",
+                modifier = Modifier.fillMaxWidth(),
+                contentScale = ContentScale.FillWidth
+            )
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("Número de cuenta (Nu de Débito)", fontWeight = FontWeight.Bold)
+                    Text("5195 3773 1452 7450")
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = {
+                        clipboard.setText(AnnotatedString("5195377314527450"))
+                        Toast.makeText(context, "Copiado", Toast.LENGTH_SHORT).show()
+                    }) { Text("Copiar") }
+                }
+            }
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("CLABE SPEI", fontWeight = FontWeight.Bold)
+                    Text("638180010171917003")
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = {
+                        clipboard.setText(AnnotatedString("638180010171917003"))
+                        Toast.makeText(context, "Copiado", Toast.LENGTH_SHORT).show()
+                    }) { Text("Copiar") }
+                }
+            }
+            Button(
+                onClick = {
+                    clipboard.setText(
+                        AnnotatedString(
+                            "Cuenta Nu: 5195377314527450\nCLABE SPEI: 638180010171917003"
+                        )
+                    )
+                    Toast.makeText(context, "Cuentas copiadas", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Copiar las dos cuentas") }
+            OutlinedButton(
+                onClick = onClose,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Cerrar") }
+        }
+    }
 }
 
 @Composable
@@ -3955,7 +4118,7 @@ fun VideoSurface(
                 Modifier.size(widthDp, heightDp)
             }
             else -> {
-                // Ajustar: el rectángulo más grande de la proporción del
+                // Normal: el rectángulo más grande de la proporción del
                 // video que cabe en la pantalla (sin recortar).
                 Modifier.fillMaxSize().aspectRatio(aspect)
             }
@@ -4054,7 +4217,7 @@ fun VideoInlinePlayer(
                         color = Color.LightGray
                     )
                 }
-                // Botón de ajuste de video (v1.6): cambia entre Ajustar,
+                // Botón de ajuste de video (v1.6): cambia entre Normal,
                 // Rellenar y Original; el modo actual se ve en el texto
                 // de arriba. Funciona también en vertical.
                 TransportIconButton(
@@ -4136,8 +4299,9 @@ fun VideoInlinePlayer(
             }
             Text(
                 text = "Pulsa pantalla completa para verlo a lo grande en " +
-                    "vertical, como en TikTok. Al cerrar, el audio sigue en " +
-                    "segundo plano; el botón de stop lo detiene todo.",
+                    "vertical, como en TikTok. Pulsa la X en pantalla " +
+                    "completa para volver a esta vista. Al cerrar, el audio " +
+                    "sigue en segundo plano; el botón de stop lo detiene todo.",
                 fontSize = 11.sp,
                 color = Color.LightGray
             )
@@ -4173,7 +4337,9 @@ fun VideoPlayerScreen(
     val durationMs by PlayerManager.durationMs.collectAsState()
     var showControls by remember { mutableStateOf(true) }
     // El botón de atrás del teléfono también cierra la pantalla (el
-    // audio sigue en segundo plano, como al pulsar la X). En la
+    // audio sigue en segundo plano, como al pulsar la X). En la pantalla
+    // completa vertical estilo TikTok (v2.2), atrás y la X vuelven a la
+    // vista normal estilo YouTube en vez de cerrar el video. En la
     // ventanita PiP no hay botón de atrás: se sale pulsando la ventana.
     BackHandler(enabled = !isInPip) { onClose() }
     LaunchedEffect(showControls, isInPip) {
@@ -4239,7 +4405,7 @@ fun VideoPlayerScreen(
                         )
                     }
                     // Botón de ajuste de video (v1.6): cambia entre
-                    // Ajustar, Rellenar y Original; el modo actual se ve
+                    // Normal, Rellenar y Original; el modo actual se ve
                     // en el texto de arriba.
                     TransportIconButton(
                         icon = Icons.Default.AspectRatio,
@@ -4259,7 +4425,7 @@ fun VideoPlayerScreen(
                     Spacer(modifier = Modifier.width(6.dp))
                     TransportIconButton(
                         icon = Icons.Default.Close,
-                        description = "Cerrar video",
+                        description = if (isLandscape) "Cerrar video" else "Volver a la vista normal",
                         color = Color.White,
                         selected = true,
                         onClick = onClose
