@@ -26,6 +26,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="Shenlong Play Music"
+            android:launchMode="singleTop"
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden">
             <intent-filter>

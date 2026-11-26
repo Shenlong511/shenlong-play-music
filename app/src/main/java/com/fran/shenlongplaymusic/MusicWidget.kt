@@ -57,7 +57,11 @@ class MusicWidget : AppWidgetProvider() {
                 R.id.widget_next,
                 MusicService.actionIntent(context, MusicService.ACTION_NEXT)
             )
-            val openIntent = Intent(context, MainActivity::class.java)
+            // (v2.5) Abrir la app ya abierta, no una segunda copia
+            // encima (ver MusicService: singleTop).
+            val openIntent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
             val openPending = PendingIntent.getActivity(
                 context,
                 0,

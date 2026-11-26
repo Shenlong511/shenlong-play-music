@@ -1295,11 +1295,16 @@ object PlayerManager {
     fun nextVideo(context: Context) {
         val p = player ?: return
         if (videoPlaylist.isEmpty()) return
-        if (currentVideoIndex < videoPlaylist.size - 1) {
-            p.seekToNextMediaItem()
-            p.play()
-            MusicService.start(context)
-        }
+        // (v2.5) Avance por índice directo: seekToNextMediaItem no
+        // avanza cuando está activo "Repetir una" y el botón de
+        // siguiente parecía trabado. Con repetir lista, al final se
+        // vuelve al principio; sin repetir, al final no avanza.
+        val nextIdx = if (currentVideoIndex < videoPlaylist.size - 1) currentVideoIndex + 1
+            else if (_repeatMode.value == 1) 0 else return
+        p.seekTo(nextIdx, 0)
+        p.prepare()
+        p.play()
+        MusicService.start(context)
     }
 
     fun previousVideo(context: Context) {
@@ -1308,8 +1313,11 @@ object PlayerManager {
         if (p.currentPosition > 3000) {
             p.seekTo(0)
         } else {
-            p.seekToPreviousMediaItem()
+            val prevIdx = if (currentVideoIndex > 0) currentVideoIndex - 1
+                else if (_repeatMode.value == 1) videoPlaylist.size - 1 else return
+            p.seekTo(prevIdx, 0)
         }
+        p.prepare()
         p.play()
         MusicService.start(context)
     }
@@ -1333,8 +1341,15 @@ object PlayerManager {
             val nextIdx = (playlist.indices - currentIndex).randomOrNull() ?: return
             p.seekTo(nextIdx, 0)
         } else {
-            p.seekToNextMediaItem()
+            // (v2.5) Avance por índice directo, como en los videos: con
+            // "Repetir una" activo, seekToNextMediaItem no avanza y el
+            // botón parecía trabado. Con repetir lista, al final se
+            // vuelve al principio; sin repetir, al final no avanza.
+            val nextIdx = if (currentIndex < playlist.size - 1) currentIndex + 1
+                else if (_repeatMode.value == 1) 0 else return
+            p.seekTo(nextIdx, 0)
         }
+        p.prepare()
         p.play()
         MusicService.start(context)
     }
@@ -1349,8 +1364,11 @@ object PlayerManager {
         if (p.currentPosition > 3000) {
             p.seekTo(0)
         } else {
-            p.seekToPreviousMediaItem()
+            val prevIdx = if (currentIndex > 0) currentIndex - 1
+                else if (_repeatMode.value == 1) playlist.size - 1 else return
+            p.seekTo(prevIdx, 0)
         }
+        p.prepare()
         p.play()
         MusicService.start(context)
     }

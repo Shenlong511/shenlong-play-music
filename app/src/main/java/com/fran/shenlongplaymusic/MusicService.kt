@@ -87,7 +87,16 @@ class MusicService : Service() {
         PlayerManager.restoreLastPlayed(this) { updateNotification() }
         val player = PlayerManager.playerOrNull()
         if (player != null) {
-            val activityIntent = Intent(this, MainActivity::class.java)
+            // (v2.5) La actividad es singleTop: al tocar la notificación
+            // o el bloqueo se reutiliza la app ya abierta en vez de
+            // abrirla otra vez encima. Sin esto, cada toque creaba una
+            // segunda MainActivity: había que dar dos veces doble atrás
+            // para salir, las dos pantallas se peleaban por la imagen
+            // del video y la música se trababa, y al cerrar una se
+            // borraba la carátula de la notificación y el bloqueo.
+            val activityIntent = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
             val sessionActivity = PendingIntent.getActivity(
                 this,
                 0,
@@ -195,7 +204,11 @@ class MusicService : Service() {
         val video = PlayerManager.artworkVideo()
         val song = PlayerManager.artworkSong()
         val isPlaying = PlayerManager.isPlaying.value
-        val activityIntent = Intent(this, MainActivity::class.java)
+        // (v2.5) Igual que la actividad de la sesión: reutilizar la app
+        // ya abierta, no abrirla otra vez encima.
+        val activityIntent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
